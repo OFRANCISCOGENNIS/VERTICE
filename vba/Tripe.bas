@@ -193,7 +193,7 @@ Public Sub GerarTripe()
     On Error Resume Next
     wb.Worksheets(ABA_CONC).Activate
     wb.Worksheets(ABA_CONC).Range("A1").Select
-    On Error GoTo 0
+    On Error GoTo Falha
 
     MsgBox "TRIPE concluido em " & Format$(Timer - t0, "0") & " s." & vbCrLf & vbCrLf & _
            "Obras (PEP3): " & (nAprov + nReprov + nVerif + nSem) & vbCrLf & _

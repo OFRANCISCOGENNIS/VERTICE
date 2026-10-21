@@ -1,5 +1,50 @@
 # Changelog — TRIPÉ
 
+## v0.2.0 (2026-10-21)
+
+Refatoração interna, **sem mudar nenhum resultado das análises**.
+
+### Tabelas embutidas divididas (`AnaliseCKCP.bas`)
+
+Cada procedimento gigante virou um procedimento principal que chama blocos de até 75 linhas,
+com os mesmos dados na mesma ordem (conferido linha a linha contra a v0.1.1):
+
+| Procedimento | Linhas de dados | Blocos |
+|---|---|---|
+| `CarregarTipoClassifAuto` | 824 | `CarregarTipoClassifAutoP1` … `P11` |
+| `CarregarClassesCustoAuto` | 740 | `CarregarClassesCustoAutoP1` … `P10` |
+| `CarregarFamiliaNivel` | 632 | `CarregarFamiliaNivelP1` … `P9` |
+| `CarregarDescServico` | 605 | `CarregarDescServicoP1` … `P9` |
+
+### Revisão de `On Error Resume Next`
+
+Correções (o tratamento de erro não era restaurado corretamente):
+
+- `Tripe.bas` › `GerarTripe`: depois de ativar a aba `TRIPE CONCLUSAO`, voltava para
+  `On Error GoTo 0` e desligava o handler `Falha`. Agora restaura `On Error GoTo Falha`.
+- `inventario.bas` › `GerarInventario`: mesmo caso ao ativar o `PAINEL DO GESTOR`. Agora
+  restaura `On Error GoTo ErrHandler`.
+- `inventario.bas` › `GravarLog` e `RegistrarKpiRun`: o `Resume Next` cobria o procedimento
+  inteiro. Agora protege só a busca da aba (que pode não existir) e a ativação/ocultação final.
+- `AnaliseCKCP.bas` › `AddTxt`, `MetricBlock` e a limpeza `SemCat:` de
+  `CarregarCatalogoMateriais`, `CarregarCatalogoServicos`, `CarregarCatalogoClasse`,
+  `CarregarConversoesCabo` e `CarregarComboServico`: o bloco ia até o `End Sub` sem restaurar.
+  Agora termina com `On Error GoTo 0` (sem efeito no comportamento, só deixa explícito).
+
+Mantidos de propósito (só formatação visual ou exclusão de abas que podem não existir),
+agora com comentário explicando:
+
+- `inventario.bas`: exclusão das abas antigas em `GerarInventario`; cabeçalho, cards e
+  formatação condicional em `ProcessarSAPxPRJ`; botão em `ProcessarResumoPEP3`; `DefinirNome`.
+- `AnaliseCKCP.bas`: `MostrarTelaFuturista`, `AplicarFreeze`, barras de dados em
+  `FormatarVisualAba` e `GerarChecklistCKCP`, `PrepararImpressao`.
+
+Os demais `On Error Resume Next` já restauravam o tratamento logo após a linha que pode falhar.
+
+### Outros
+
+- `AnaliseCKCP.bas` passa a ter quebras de linha CRLF, como os outros `.bas` (estava só com LF).
+
 ## v0.1.1 (2026-10-20)
 
 - TRIPE DETALHE: nova coluna `DESCRICAO DO MATERIAL` ao lado de `FAMILIA`, com os materiais do

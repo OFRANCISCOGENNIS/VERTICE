@@ -307,6 +307,7 @@ Public Sub GerarInventario()
     LogAdd "CONFIG carregada e base validada: " & wsBase.Name
 
     Application.DisplayAlerts = False
+    ' Cada Delete pode falhar (aba inexistente) - esperado.
     On Error Resume Next
     wb.Worksheets("PAINEL DO GESTOR").Delete
     wb.Worksheets("ANALISE SAP x PRJ").Delete
@@ -396,7 +397,7 @@ Public Sub GerarInventario()
     On Error Resume Next
     wsGestor.Activate
     wsGestor.Range("A1").Select
-    On Error GoTo 0
+    On Error GoTo ErrHandler
 
     mUltimoOk = True
     Dim msgFim As String
@@ -781,6 +782,7 @@ Private Sub ProcessarSAPxPRJ(wsBase As Worksheet, wsDet As Worksheet)
         wsDet.Range(wsDet.Columns(30), wsDet.Columns(34)).Hidden = True
     End If
 
+    ' Best-effort (so formatacao visual): falha aqui nao altera a analise.
     On Error Resume Next
 
     With wsDet.Range("A1:P2")
@@ -926,6 +928,7 @@ Private Sub ProcessarSAPxPRJ(wsBase As Worksheet, wsDet As Worksheet)
             .Borders.LineStyle = xlContinuous : .Borders.Color = RGB(225, 225, 225)
         End With
 
+        ' Best-effort (so formatacao visual): falha aqui nao altera a analise.
         On Error Resume Next
         Dim bRng As Range : Set bRng = wsDet.Range(wsDet.Cells(DS, 1), wsDet.Cells(lastD, 11))
         bRng.FormatConditions.Delete
@@ -4381,9 +4384,10 @@ Private Sub LogAdd(msg As String)
 End Sub
 
 Private Sub GravarLog(wb As Workbook)
-    On Error Resume Next
     Dim ws As Worksheet
-    Set ws = wb.Worksheets("LOG EXECUCAO")
+    On Error Resume Next
+    Set ws = wb.Worksheets("LOG EXECUCAO")   ' Nothing se a aba ainda nao existe
+    On Error GoTo 0
     If ws Is Nothing Then
         Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
         ws.Name = "LOG EXECUCAO"
@@ -4401,6 +4405,7 @@ Private Sub GravarLog(wb As Workbook)
     ws.Columns(1).ColumnWidth = 95
     ws.Tab.Color = RGB(120, 120, 120)
     ' sai da aba LOG (recem-criada fica ativa) para poder oculta-la
+    On Error Resume Next   ' Worksheets(1) pode estar oculta
     wb.Worksheets(1).Activate
     ws.Visible = xlSheetHidden
     On Error GoTo 0
@@ -5438,6 +5443,7 @@ Private Sub ProcessarResumoPEP3(wb As Workbook, wsDet As Worksheet)
     End If
 
     ' Botao: exporta so as devolucoes (PEP3 reprovados) para envio a projetista
+    ' Best-effort (so formatacao visual): falha aqui nao altera a analise.
     On Error Resume Next
     Dim btn As Shape
     Set btn = ws.Shapes.AddShape(msoShapeRoundedRectangle, ws.Cells(1, 9).Left, ws.Cells(1, 9).Top, 170, 34)
@@ -5997,9 +6003,10 @@ End Function
 Private Sub RegistrarKpiRun(wb As Workbook, ByVal nPep3 As Long, ByVal nReprov As Long, _
         ByVal nAlertas As Long, ByVal nDiverg As Long, ByVal valRisk As Double, _
         ByVal nota As Double)
-    On Error Resume Next
     Dim ws As Worksheet
-    Set ws = wb.Worksheets(ABA_KPI)
+    On Error Resume Next
+    Set ws = wb.Worksheets(ABA_KPI)   ' Nothing se a aba ainda nao existe
+    On Error GoTo 0
     If ws Is Nothing Then
         Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
         ws.Name = ABA_KPI
@@ -6032,6 +6039,7 @@ Private Sub RegistrarKpiRun(wb As Workbook, ByVal nPep3 As Long, ByVal nReprov A
     ws.Cells(r, 7).Value = nota
     ws.Tab.Color = RGB(120, 120, 120)
     ' sai da aba antes de oculta-la (a recem-criada fica ativa)
+    On Error Resume Next   ' Worksheets(1) pode estar oculta
     wb.Worksheets(1).Activate
     ws.Visible = xlSheetHidden
     On Error GoTo 0
@@ -6071,6 +6079,7 @@ End Sub
 Private Sub DefinirNome(wb As Workbook, sheetName As String, nome As String, _
                         token As String, colToken As Long, nCols As Long, _
                         Optional ByVal contiguo As Boolean = False)
+    ' Best-effort: o nome definido e so atalho de navegacao; falha nao altera a analise.
     On Error Resume Next
     Dim ws As Worksheet : Set ws = wb.Worksheets(sheetName)
     If ws Is Nothing Then Exit Sub

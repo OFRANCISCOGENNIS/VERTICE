@@ -1,4 +1,4 @@
-# VÉRTICE — TRIPÉ: Projeto × Baixa SAP × Serviço pago (v0.1.1)
+# VÉRTICE — TRIPÉ: Projeto × Baixa SAP × Serviço pago (v0.2.0)
 
 > *A obra só fica de pé se as três pernas baterem.*
 

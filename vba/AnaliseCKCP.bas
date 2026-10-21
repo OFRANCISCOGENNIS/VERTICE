@@ -261,6 +261,7 @@ End Sub
 '  TELA DE RESULTADO FUTURISTA  (painel HUD desenhado com Shapes)
 '==============================================================================
 Private Sub MostrarTelaFuturista(ByVal nLin As Long, ByVal seg As Double)
+    ' Best-effort (so formatacao visual): falha aqui nao altera a analise.
     On Error Resume Next
     LimparSplash
 
@@ -338,6 +339,7 @@ End Sub
 Private Sub AddTxt(ws As Worksheet, nm As String, L As Double, T As Double, _
                    W As Double, H As Double, s As String, fname As String, _
                    sz As Single, bold As Boolean, cor As Long, al As Long)
+    ' Best-effort (so formatacao visual): falha aqui nao altera a analise.
     On Error Resume Next
     Dim tb As Shape
     Set tb = ws.Shapes.AddTextbox(msoTextOrientationHorizontal, L, T, W, H)
@@ -354,6 +356,7 @@ Private Sub AddTxt(ws As Worksheet, nm As String, L As Double, T As Double, _
     End With
     tb.TextFrame2.VerticalAnchor = msoAnchorMiddle
     tb.TextFrame2.WordWrap = msoFalse
+    On Error GoTo 0
 End Sub
 
 Private Sub MetricBlock(ws As Worksheet, nm As String, L As Double, T As Double, _
@@ -362,6 +365,7 @@ Private Sub MetricBlock(ws As Worksheet, nm As String, L As Double, T As Double,
     On Error Resume Next
     AddTxt ws, nm & "_L", L, T, W - 8, 14, rotulo, "Segoe UI", 8.5, False, mut, msoAlignLeft
     AddTxt ws, nm & "_V", L, T + 16, W - 8, 30, valor, "Segoe UI", 22, True, cor, msoAlignLeft
+    On Error GoTo 0
 End Sub
 
 Private Sub LimparSplash()
@@ -728,12 +732,26 @@ Private Sub CarregarCatalogoMateriais()
 SemCat:
     On Error Resume Next
     If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    On Error GoTo 0
 End Sub
 
 ' Normaliza cdigo de material para casar base x catlogo
 Private Sub CarregarDescServico()
     ' De-para COD_SERVICO -> Denominacao (catalogo embutido).
     Set dDescSrv = CreateObject("Scripting.Dictionary")
+    ' Tabela embutida dividida em 9 blocos (limite de tamanho de procedimento).
+    CarregarDescServicoP1
+    CarregarDescServicoP2
+    CarregarDescServicoP3
+    CarregarDescServicoP4
+    CarregarDescServicoP5
+    CarregarDescServicoP6
+    CarregarDescServicoP7
+    CarregarDescServicoP8
+    CarregarDescServicoP9
+End Sub
+
+Private Sub CarregarDescServicoP1()
     dDescSrv("5013300045") = "ATEND EMERG INST TRAFO 1F ATE 15KVA"
     dDescSrv("5013300046") = "ATEND EMERG RET TRAFO 1F ATE 15KVA"
     dDescSrv("5015000019") = "RET COND NU ALUMINIO <=1/0 SRD"
@@ -809,6 +827,9 @@ Private Sub CarregarDescServico()
     dDescSrv("5025300122") = "INST ESTR CP RELIGADOR/SEC 3F >400A LM"
     dDescSrv("5025300124") = "INST REGULADOR TENSAO POSTE/PLATAF LM"
     dDescSrv("5025300125") = "RET REGULADOR TENSAO POSTE/PLATAF LM"
+End Sub
+
+Private Sub CarregarDescServicoP2()
     dDescSrv("5025300139") = "INST TRAFO DT POSTE/PLATAF 1/2F LM"
     dDescSrv("5025300140") = "RET TRAFO DT POSTE/PLATAF 1/2F LM"
     dDescSrv("5025300141") = "INST TRAFO DT POSTE/PLATAF 3F LM"
@@ -884,6 +905,9 @@ Private Sub CarregarDescServico()
     dDescSrv("5033000314") = "TURMA LV INST TRAFO DT LV"
     dDescSrv("5033000315") = "TURMA LV RET TRAFO DT LV"
     dDescSrv("5033000318") = "INST PARA-RAIOS MT LV"
+End Sub
+
+Private Sub CarregarDescServicoP3()
     dDescSrv("5044000003") = "APROVACOES E AUTORIZACOES"
     dDescSrv("5100100024") = "SERVICO DE TELECOM"
     dDescSrv("5150100002") = "SERVICOS LOGISTICOS"
@@ -959,6 +983,9 @@ Private Sub CarregarDescServico()
     dDescSrv("5500000597") = "AHO211_B_RETIRADA CONDUTOR AEREO BT-LM"
     dDescSrv("5500000617") = "AHO218_A_INST (FACA,FUSIVEIS,LAMINAS)-LM"
     dDescSrv("5500000618") = "AHO218_B_INST (FACA,FUSIVEIS,LAMINAS)-LM"
+End Sub
+
+Private Sub CarregarDescServicoP4()
     dDescSrv("5500000619") = "AHO218_C_INST (FACA,FUSIVEIS,LAMINAS)-LM"
     dDescSrv("5500000620") = "AHO219_A_INST ELEM DE CONT/TELECONT"
     dDescSrv("5500000621") = "AHO219_B_INST ELEM DE CONT/TELECONT"
@@ -1034,6 +1061,9 @@ Private Sub CarregarDescServico()
     dDescSrv("5500400502") = "THO108_A_PODA POR UNIDADE MT S RECOLH"
     dDescSrv("5500400503") = "THO108_B_PODA POR UNIDADE MT S RECOLH"
     dDescSrv("5500400512") = "THO112_A_PODA POR UNID. BT COM RECOLH"
+End Sub
+
+Private Sub CarregarDescServicoP5()
     dDescSrv("5500400513") = "THO112_B_PODA POR UNID. BT COM RECOLH"
     dDescSrv("5023000144") = "NIVELAR CRUZETA TIPO HT LD LV PDE"
     dDescSrv("5025300059") = "COMISSIONAMENTO DE OBRA"
@@ -1109,6 +1139,9 @@ Private Sub CarregarDescServico()
     dDescSrv("5052300004") = "INSTALAR BAR TRIF DUPLO FLEX ATE 34,5KV"
     dDescSrv("5052300005") = "INSTALAR BAR TRIF SIMP FLEX 69 OU 138KV"
     dDescSrv("5052400001") = "LANCAR CABOS PARA-RAIOS"
+End Sub
+
+Private Sub CarregarDescServicoP6()
     dDescSrv("5052500000") = "EXECUTAR BASE CHAMINE CABOS DE FORCA"
     dDescSrv("5052500001") = "EXECUTAR CAIXA DE PASSAGEM 400MM X 400MM"
     dDescSrv("5052500002") = "EXECUTAR CAIXA DE PASSAGEM 600MM X 600MM"
@@ -1184,6 +1217,9 @@ Private Sub CarregarDescServico()
     dDescSrv("5057100021") = "LEV SEMI-CADAST E PLANIALTIM SE"
     dDescSrv("5057100023") = "PROJETO ENTRADA DE LINHA ATE 34,5KV"
     dDescSrv("5057100024") = "PROJETO ENTRADA DE LINHA ACIMA DE 34,5KV"
+End Sub
+
+Private Sub CarregarDescServicoP7()
     dDescSrv("5057100025") = "ELABORACAO DE PROJETO DE AUTOM SISTEMAS"
     dDescSrv("5057100027") = "CONEXAO BANCO DE CAPACITOR ATE 34,5 KV"
     dDescSrv("5057100029") = "INTERLIGACAO DE BARRAS ATE 34,5KV"
@@ -1259,6 +1295,9 @@ Private Sub CarregarDescServico()
     dDescSrv("5041000108") = "INST ISOLAD SUSP SP 69KV LD LV PDE"
     dDescSrv("5041000109") = "RET ISOLAD SUSP SP 69KV LD LV PDE"
     dDescSrv("5050300014") = "CONSTRUCAO BASE PARA TRAFO 34,5/13,8 KV"
+End Sub
+
+Private Sub CarregarDescServicoP8()
     dDescSrv("5050300021") = "CONSTRUCAO BASE PARA DISJUNTOR 15KV"
     dDescSrv("5050300028") = "CONSTRUCAO BASE PARA DISJUNTOR 72,5KV"
     dDescSrv("5050300108") = "DEMOLIR BASE PARA DISJ. ATE 34,5KV"
@@ -1334,6 +1373,9 @@ Private Sub CarregarDescServico()
     dDescSrv("5500500666") = "69KV LANC. CABO AL, DE 266,8 A 477MCM"
     dDescSrv("5500500691") = "DMONT. CABO DE ACO"
     dDescSrv("5500500918") = "US - INSTALACAO DE CADEIA DE ISOLADORES"
+End Sub
+
+Private Sub CarregarDescServicoP9()
     dDescSrv("5500500919") = "US - RETIRADA DE CADEIA DE ISOLADORES DE"
     dDescSrv("5500500921") = "LOCACAO MAT/EQ CACAMBA ESTAC ATE 10M3'"
     dDescSrv("5500500939") = "69 KV INST. CADEIA ISOLADORES SUS LDAT"
@@ -1432,6 +1474,7 @@ Private Sub CarregarCatalogoServicos()
 SemCat:
     On Error Resume Next
     If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    On Error GoTo 0
 End Sub
 
 ' Overrides curados de reclassificacao CLS1/CLS2/CLS3 por COD_SERVICO
@@ -1531,6 +1574,7 @@ Private Sub CarregarCatalogoClasse()
 SemCat:
     On Error Resume Next
     If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    On Error GoTo 0
 End Sub
 
 Private Sub CarregarClassificacaoClassesDados()
@@ -1616,6 +1660,20 @@ End Sub
 Private Sub CarregarClassesCustoAuto()
     ' Base oficial CLASSE_CUSTO_ATUAIS (embutida). Chamada ANTES dos overrides
     ' curados de CarregarClassificacaoClassesDados, que tem prioridade.
+    ' Tabela embutida dividida em 10 blocos (limite de tamanho de procedimento).
+    CarregarClassesCustoAutoP1
+    CarregarClassesCustoAutoP2
+    CarregarClassesCustoAutoP3
+    CarregarClassesCustoAutoP4
+    CarregarClassesCustoAutoP5
+    CarregarClassesCustoAutoP6
+    CarregarClassesCustoAutoP7
+    CarregarClassesCustoAutoP8
+    CarregarClassesCustoAutoP9
+    CarregarClassesCustoAutoP10
+End Sub
+
+Private Sub CarregarClassesCustoAutoP1()
     AddClasseCusto "6105107110", "OUTROS", "OUTROS", "RISCO"
     AddClasseCusto "6105207110", "OUTROS", "OUTROS", "RISCO"
     AddClasseCusto "610530902", "OUTROS", "ALUGUEL", "RISCO"
@@ -1691,6 +1749,9 @@ Private Sub CarregarClassesCustoAuto()
     AddClasseCusto "6150002133", "OUTROS", "OUTROS", "RISCO"
     AddClasseCusto "6150002134", "OUTROS", "OUTROS", "RISCO"
     AddClasseCusto "6150002136", "OUTROS", "RISCO", "RISCO"
+End Sub
+
+Private Sub CarregarClassesCustoAutoP2()
     AddClasseCusto "6150002137", "OUTROS", "OUTROS", "RISCO"
     AddClasseCusto "6150002138", "OUTROS", "OUTROS", "RISCO"
     AddClasseCusto "6150002139", "OUTROS", "OUTROS", "RISCO"
@@ -1766,6 +1827,9 @@ Private Sub CarregarClassesCustoAuto()
     AddClasseCusto "6150269200", "OUTROS", "MOP_CUSTEIO", "RISCO"
     AddClasseCusto "6150269300", "OUTROS", "MOP_CUSTEIO", "RISCO"
     AddClasseCusto "6150269500", "OUTROS", "MOP_CUSTEIO", "RISCO"
+End Sub
+
+Private Sub CarregarClassesCustoAutoP3()
     AddClasseCusto "6150269600", "OUTROS", "MOP_CUSTEIO", "RISCO"
     AddClasseCusto "6150269800", "OUTROS", "MOP_CUSTEIO", "RISCO"
     AddClasseCusto "6150269900", "OUTROS", "MOP_CUSTEIO", "RISCO"
@@ -1841,6 +1905,9 @@ Private Sub CarregarClassesCustoAuto()
     AddClasseCusto "8009500000", "OUTROS", "CC_LIQUIDACAO", "RISCO"
     AddClasseCusto "8009600000", "OUTROS", "CC_LIQUIDACAO", "RISCO"
     AddClasseCusto "8009700000", "OUTROS", "CC_LIQUIDACAO", "RISCO"
+End Sub
+
+Private Sub CarregarClassesCustoAutoP4()
     AddClasseCusto "8009800000", "OUTROS", "CC_LIQUIDACAO", "RISCO"
     AddClasseCusto "8009900000", "OUTROS", "CC_LIQUIDACAO", "RISCO"
     AddClasseCusto "8010000001", "OUTROS", "RISCO", "RISCO"
@@ -1916,6 +1983,9 @@ Private Sub CarregarClassesCustoAuto()
     AddClasseCusto "8111190000", "OUTROS", "OUTROS", "RISCO"
     AddClasseCusto "8111200000", "OUTROS", "CC_MATERIAL", "RISCO"
     AddClasseCusto "8111210000", "OUTROS", "CC_MATERIAL", "RISCO"
+End Sub
+
+Private Sub CarregarClassesCustoAutoP5()
     AddClasseCusto "8111220000", "OUTROS", "CC_MATERIAL", "RISCO"
     AddClasseCusto "8111230000", "OUTROS", "CC_MATERIAL", "RISCO"
     AddClasseCusto "8111250000", "OUTROS", "CC_MATERIAL", "RISCO"
@@ -1991,6 +2061,9 @@ Private Sub CarregarClassesCustoAuto()
     AddClasseCusto "8114690000", "OUTROS", "SIST COMUNIC LOCAL", "RISCO"
     AddClasseCusto "8114770000", "OUTROS", "CC_MATERIAL", "RISCO"
     AddClasseCusto "8114800000", "OUTROS", "CC_MATERIAL", "RISCO"
+End Sub
+
+Private Sub CarregarClassesCustoAutoP6()
     AddClasseCusto "8114810000", "OUTROS", "CC_MATERIAL", "RISCO"
     AddClasseCusto "8114820000", "OUTROS", "CC_MATERIAL", "RISCO"
     AddClasseCusto "8114830000", "OUTROS", "CC_MATERIAL", "RISCO"
@@ -2066,6 +2139,9 @@ Private Sub CarregarClassesCustoAuto()
     AddClasseCusto "8210480000", "OUTROS", "CC_MATERIAL", "RISCO"
     AddClasseCusto "8210490000", "OUTROS", "PUBLICIDADE", "PUBLICIDADE"
     AddClasseCusto "8210500000", "OUTROS", "SERVICOS DE REPROGRAFIA", "RISCO"
+End Sub
+
+Private Sub CarregarClassesCustoAutoP7()
     AddClasseCusto "8210510000", "OUTROS", "AGUA ESGOTO", "RISCO"
     AddClasseCusto "8210530000", "SERVICO", "RISCO", "RISCO"
     AddClasseCusto "8210540000", "OUTROS", "CC_SERVICO", "RISCO"
@@ -2141,6 +2217,9 @@ Private Sub CarregarClassesCustoAuto()
     AddClasseCusto "8820020000", "OUTROS", "OUTROS", "RISCO"
     AddClasseCusto "8826860000", "MATERIAL", "TERRENO", "MAT. UC"
     AddClasseCusto "8829930000", "OUTROS", "OUTROS", "TRIBUTOS"
+End Sub
+
+Private Sub CarregarClassesCustoAutoP8()
     AddClasseCusto "8830010000", "OUTROS", "OUTROS", "RISCO"
     AddClasseCusto "8830020000", "OUTROS", "INDENIZACAO", "RISCO"
     AddClasseCusto "8830030000", "OUTROS", "INDENIZACAO", "RISCO"
@@ -2216,6 +2295,9 @@ Private Sub CarregarClassesCustoAuto()
     AddClasseCusto "8960009681", "OUTROS", "RISCO", "RISCO"
     AddClasseCusto "8960260000", "OUTROS", "MOP", "MOP"
     AddClasseCusto "8960270000", "OUTROS", "MOP", "MOP"
+End Sub
+
+Private Sub CarregarClassesCustoAutoP9()
     AddClasseCusto "8960280000", "OUTROS", "MOP", "MOP"
     AddClasseCusto "8960290000", "OUTROS", "MOP_MONTAGEM", "MOP"
     AddClasseCusto "8960950000", "OUTROS", "MOP", "MOP"
@@ -2291,6 +2373,9 @@ Private Sub CarregarClassesCustoAuto()
     AddClasseCusto "AHT53", "OUTROS", "OUTROS", "OUTROS"
     AddClasseCusto "AHT55", "OUTROS", "OUTROS", "OUTROS"
     AddClasseCusto "AHT91", "OUTROS", "MOP", "MOP"
+End Sub
+
+Private Sub CarregarClassesCustoAutoP10()
     AddClasseCusto "AHT92", "OUTROS", "MOP", "MOP"
     AddClasseCusto "AHT93", "OUTROS", "TRIBUTOS", "TRIBUTOS"
     AddClasseCusto "AHT95", "OUTROS", "MOP", "MOP"
@@ -2408,6 +2493,7 @@ Private Sub CarregarConversoesCabo()
 SemCat:
     On Error Resume Next
     If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    On Error GoTo 0
 End Sub
 
 ' Fator de converso do material (0 = sem converso)
@@ -2472,6 +2558,7 @@ Private Sub CarregarComboServico()
 SemCat:
     On Error Resume Next
     If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    On Error GoTo 0
 End Sub
 
 ' Fator multiplicador do servio. So aplica quando a FAMILIA do combo bate com o
@@ -2551,6 +2638,21 @@ Private Sub CarregarTipoClassifAuto()
     ' TIPO (UC/COM) por familia derivado do CLS3 dominante do catalogo de
     ' materiais (MAT. UC/MAT. COM). Preenche familias fora da tabela curada;
     ' AddTipoCls nao sobrepoe entradas ja definidas (curadas tem prioridade).
+    ' Tabela embutida dividida em 11 blocos (limite de tamanho de procedimento).
+    CarregarTipoClassifAutoP1
+    CarregarTipoClassifAutoP2
+    CarregarTipoClassifAutoP3
+    CarregarTipoClassifAutoP4
+    CarregarTipoClassifAutoP5
+    CarregarTipoClassifAutoP6
+    CarregarTipoClassifAutoP7
+    CarregarTipoClassifAutoP8
+    CarregarTipoClassifAutoP9
+    CarregarTipoClassifAutoP10
+    CarregarTipoClassifAutoP11
+End Sub
+
+Private Sub CarregarTipoClassifAutoP1()
     AddTipoCls "ABRACADEIRA TRIPARTIDA DN700", "UC"
     AddTipoCls "ABRACADEIRA_PRESSAO", "COM"
     AddTipoCls "ABRANDADOR", "UC"
@@ -2626,6 +2728,9 @@ Private Sub CarregarTipoClassifAuto()
     AddTipoCls "BATERIA SOLAR", "COM"
     AddTipoCls "BATERIAS", "COM"
     AddTipoCls "BEBEDOURO", "UC"
+End Sub
+
+Private Sub CarregarTipoClassifAutoP2()
     AddTipoCls "BETONEIRA", "UC"
     AddTipoCls "BGAN KIT LEGACY", "UC"
     AddTipoCls "BLOCO", "COM"
@@ -2701,6 +2806,9 @@ Private Sub CarregarTipoClassifAuto()
     AddTipoCls "CANALETA CONC", "UC"
     AddTipoCls "CANALETA_PERFURADA", "COM"
     AddTipoCls "CANETA", "COM"
+End Sub
+
+Private Sub CarregarTipoClassifAutoP3()
     AddTipoCls "CANIVETE", "COM"
     AddTipoCls "CANTONEIRA SIGFI", "COM"
     AddTipoCls "CAP PVC", "COM"
@@ -2776,6 +2884,9 @@ Private Sub CarregarTipoClassifAuto()
     AddTipoCls "CONJ_POSTE ARMADO", "UC"
     AddTipoCls "CONTAINER", "COM"
     AddTipoCls "CONTATO", "UC"
+End Sub
+
+Private Sub CarregarTipoClassifAutoP4()
     AddTipoCls "CONTATO AUX", "COM"
     AddTipoCls "CONTATOR", "COM"
     AddTipoCls "CONTR ELETN", "UC"
@@ -2851,6 +2962,9 @@ Private Sub CarregarTipoClassifAuto()
     AddTipoCls "EMPILHADEIRA", "UC"
     AddTipoCls "ENCOD ABSOLUTO", "UC"
     AddTipoCls "ENGRAXADEIRA", "UC"
+End Sub
+
+Private Sub CarregarTipoClassifAutoP5()
     AddTipoCls "ENVELOPE MEDIDOR", "COM"
     AddTipoCls "ENVELOPE PLAST", "COM"
     AddTipoCls "EQP_LABORATORIO", "COM"
@@ -2926,6 +3040,9 @@ Private Sub CarregarTipoClassifAuto()
     AddTipoCls "INTERRUPTOR TOM", "COM"
     AddTipoCls "INVERSOR", "UC"
     AddTipoCls "INVERSOR SIGFI", "UC"
+End Sub
+
+Private Sub CarregarTipoClassifAutoP6()
     AddTipoCls "ISOL PEDESTAL", "UC"
     AddTipoCls "ISOL PEDESTAL_SUPORTE", "UC"
     AddTipoCls "ISOLADOR", "COM"
@@ -3001,6 +3118,9 @@ Private Sub CarregarTipoClassifAuto()
     AddTipoCls "MEDIDOR_FRONTEIRA", "UC"
     AddTipoCls "MED_VAZAO", "UC"
     AddTipoCls "MESA SE", "UC"
+End Sub
+
+Private Sub CarregarTipoClassifAutoP7()
     AddTipoCls "MICROCOMPUTADOR", "UC"
     AddTipoCls "MICROHMIMETRO", "UC"
     AddTipoCls "MICROSWITCH INVERS", "UC"
@@ -3076,6 +3196,9 @@ Private Sub CarregarTipoClassifAuto()
     AddTipoCls "PATCH UTP", "COM"
     AddTipoCls "PDA_RELE", "UC"
     AddTipoCls "PE DE TORRE", "COM"
+End Sub
+
+Private Sub CarregarTipoClassifAutoP8()
     AddTipoCls "PECA_RET", "COM"
     AddTipoCls "PEDRA_BRITADA", "COM"
     AddTipoCls "PEDREGULHO/SEIXO", "COM"
@@ -3151,6 +3274,9 @@ Private Sub CarregarTipoClassifAuto()
     AddTipoCls "RELE DIGITAL", "UC"
     AddTipoCls "RELE PROT", "UC"
     AddTipoCls "RELE REFLETOR", "COM"
+End Sub
+
+Private Sub CarregarTipoClassifAutoP9()
     AddTipoCls "RELE REG", "UC"
     AddTipoCls "RELE REGULADOR", "UC"
     AddTipoCls "RELE SUPERV_TENSAO", "COM"
@@ -3226,6 +3352,9 @@ Private Sub CarregarTipoClassifAuto()
     AddTipoCls "TAMPA", "COM"
     AddTipoCls "TAMPA ESGOTO", "COM"
     AddTipoCls "TAMPAO", "COM"
+End Sub
+
+Private Sub CarregarTipoClassifAutoP10()
     AddTipoCls "TAMPA_CANALETA", "COM"
     AddTipoCls "TANQUE", "COM"
     AddTipoCls "TANQUE AGITADOR", "COM"
@@ -3301,6 +3430,9 @@ Private Sub CarregarTipoClassifAuto()
     AddTipoCls "TRANSCEIVER", "COM"
     AddTipoCls "TRANSCEPTOR", "UC"
     AddTipoCls "TRANSDUTOR", "UC"
+End Sub
+
+Private Sub CarregarTipoClassifAutoP11()
     AddTipoCls "TRANSMISSOR", "UC"
     AddTipoCls "TRILHO MET", "COM"
     AddTipoCls "TRILHOS", "COM"
@@ -3450,6 +3582,19 @@ End Function
 Private Sub CarregarFamiliaNivel()
     ' Nivel da familia (FAMILIAS_ATUAIS): P=PRIMARIO, S=SECUNDARIO, demais=NA.
     Set dFamNivel = CreateObject("Scripting.Dictionary")
+    ' Tabela embutida dividida em 9 blocos (limite de tamanho de procedimento).
+    CarregarFamiliaNivelP1
+    CarregarFamiliaNivelP2
+    CarregarFamiliaNivelP3
+    CarregarFamiliaNivelP4
+    CarregarFamiliaNivelP5
+    CarregarFamiliaNivelP6
+    CarregarFamiliaNivelP7
+    CarregarFamiliaNivelP8
+    CarregarFamiliaNivelP9
+End Sub
+
+Private Sub CarregarFamiliaNivelP1()
     dFamNivel(NormClassif("102100067")) = "PRIMARIO"
     dFamNivel(NormClassif("102100160")) = "PRIMARIO"
     dFamNivel(NormClassif("ABERTURA DE ACESSO")) = "NA"
@@ -3525,6 +3670,9 @@ Private Sub CarregarFamiliaNivel()
     dFamNivel(NormClassif("BOMBA SUBM")) = "SECUNDARIO"
     dFamNivel(NormClassif("BORNE")) = "NA"
     dFamNivel(NormClassif("BRINDE PROMOC - RISCO")) = "NA"
+End Sub
+
+Private Sub CarregarFamiliaNivelP2()
     dFamNivel(NormClassif("BRITA")) = "NA"
     dFamNivel(NormClassif("BRITAMENTO DO PATIO")) = "SECUNDARIO"
     dFamNivel(NormClassif("CABLAGEM _BT")) = "NA"
@@ -3600,6 +3748,9 @@ Private Sub CarregarFamiliaNivel()
     dFamNivel(NormClassif("CH SU FACA")) = "PRIMARIO"
     dFamNivel(NormClassif("CH SU FACA AT")) = "PRIMARIO"
     dFamNivel(NormClassif("CH VAC 3F")) = "PRIMARIO"
+End Sub
+
+Private Sub CarregarFamiliaNivelP3()
     dFamNivel(NormClassif("CHAPA XADREZ")) = "NA"
     dFamNivel(NormClassif("CHAVE_E_OU_PARA_RAIO")) = "PRIMARIO"
     dFamNivel(NormClassif("CIMENTO")) = "NA"
@@ -3675,6 +3826,9 @@ Private Sub CarregarFamiliaNivel()
     dFamNivel(NormClassif("DESMOBILIZAR")) = "NA"
     dFamNivel(NormClassif("DESMONT E REINST IP")) = "NA"
     dFamNivel(NormClassif("DESTOCAMENTO")) = "NA"
+End Sub
+
+Private Sub CarregarFamiliaNivelP4()
     dFamNivel(NormClassif("DETECTOR_FALTA")) = "NA"
     dFamNivel(NormClassif("DETRITOS")) = "NA"
     dFamNivel(NormClassif("DIAGNOSTICO")) = "NA"
@@ -3750,6 +3904,9 @@ Private Sub CarregarFamiliaNivel()
     dFamNivel(NormClassif("ESTUDO AMBIENTAL")) = "NA"
     dFamNivel(NormClassif("EXAUSTOR")) = "NA"
     dFamNivel(NormClassif("EXEC_POCO")) = "SECUNDARIO"
+End Sub
+
+Private Sub CarregarFamiliaNivelP5()
     dFamNivel(NormClassif("EXTENSAO OTICA")) = "NA"
     dFamNivel(NormClassif("EXTERNALIZACAO PADRAO")) = "SECUNDARIO"
     dFamNivel(NormClassif("EXTINTOR")) = "NA"
@@ -3825,6 +3982,9 @@ Private Sub CarregarFamiliaNivel()
     dFamNivel(NormClassif("LIMPEZA_TERRENO")) = "NA"
     dFamNivel(NormClassif("LINHA MORTA")) = "NA"
     dFamNivel(NormClassif("LINHA VIVA")) = "NA"
+End Sub
+
+Private Sub CarregarFamiliaNivelP6()
     dFamNivel(NormClassif("LNB AUTO")) = "SECUNDARIO"
     dFamNivel(NormClassif("LOC EQUIP")) = "NA"
     dFamNivel(NormClassif("LOC MAT/EQ")) = "NA"
@@ -3900,6 +4060,9 @@ Private Sub CarregarFamiliaNivel()
     dFamNivel(NormClassif("PLACA DA OBRA")) = "NA"
     dFamNivel(NormClassif("PLACA DE REDE")) = "SECUNDARIO"
     dFamNivel(NormClassif("PLACA ID")) = "NA"
+End Sub
+
+Private Sub CarregarFamiliaNivelP7()
     dFamNivel(NormClassif("PLACA ID OBRA")) = "NA"
     dFamNivel(NormClassif("PLACA ID SE")) = "NA"
     dFamNivel(NormClassif("PLACA MONTG SIGFI")) = "NA"
@@ -3975,6 +4138,9 @@ Private Sub CarregarFamiliaNivel()
     dFamNivel(NormClassif("SEGURANCA DE OBRAS")) = "NA"
     dFamNivel(NormClassif("SEGURANCA DO TRABALHO")) = "NA"
     dFamNivel(NormClassif("SENSOR")) = "SECUNDARIO"
+End Sub
+
+Private Sub CarregarFamiliaNivelP8()
     dFamNivel(NormClassif("SEQ_FASE")) = "NA"
     dFamNivel(NormClassif("SERV ADM")) = "NA"
     dFamNivel(NormClassif("SERV ADM MAT")) = "NA"
@@ -4050,6 +4216,9 @@ Private Sub CarregarFamiliaNivel()
     dFamNivel(NormClassif("TORA EUCALIPTO")) = "NA"
     dFamNivel(NormClassif("TORRE")) = "PRIMARIO"
     dFamNivel(NormClassif("TP")) = "SECUNDARIO"
+End Sub
+
+Private Sub CarregarFamiliaNivelP9()
     dFamNivel(NormClassif("TP/TC AT")) = "PRIMARIO"
     dFamNivel(NormClassif("TP/TC_SUPORT CONC")) = "NA"
     dFamNivel(NormClassif("TP_CAIXA LIG")) = "NA"
@@ -7092,6 +7261,7 @@ End Function
 
 Private Sub AplicarFreeze(ws As Worksheet, ByVal celula As String, _
                           Optional ByVal congelar As Boolean = True)
+    ' Best-effort (so formatacao visual): falha aqui nao altera a analise.
     On Error Resume Next
     Dim su As Boolean: su = Application.ScreenUpdating
     Application.ScreenUpdating = True
@@ -7455,6 +7625,7 @@ Private Sub FormatarVisualAba(ws As Worksheet, ByVal nome As String, _
             ' Data bars sutis em colunas de valor (leitura rapida de magnitude)
             If fmt = "#,##0.00" And (InStr(hh, "VALOR") > 0 Or InStr(hh, "DIF") > 0 _
                Or InStr(hh, "TOTAL") > 0) And Not EhColunaVeredito(hh) Then
+                ' Best-effort (so formatacao visual): falha aqui nao altera a analise.
                 On Error Resume Next
                 With ws.Range(ws.Cells(2, jc), ws.Cells(nR, jc)).FormatConditions.AddDatabar
                     .BarColor.Color = COR_UI_BARRA
@@ -7470,6 +7641,7 @@ Private Sub FormatarVisualAba(ws As Worksheet, ByVal nome As String, _
 
             ' Data bars em colunas de percentual (0..100) - leitura de proporcao
             If fmt = "0.0" And InStr(hh, "PERC") > 0 And Not EhColunaVeredito(hh) Then
+                ' Best-effort (so formatacao visual): falha aqui nao altera a analise.
                 On Error Resume Next
                 With ws.Range(ws.Cells(2, jc), ws.Cells(nR, jc)).FormatConditions.AddDatabar
                     .BarColor.Color = COR_UI_BARRA_PCT
@@ -7562,6 +7734,7 @@ End Function
 ' Impressao pronta: paisagem, ajuste a largura, cabecalho repetido e rodape.
 Private Sub PrepararImpressao(ws As Worksheet, ByVal nome As String, _
                               ByVal nR As Long, ByVal nC As Long)
+    ' Best-effort (so formatacao visual): falha aqui nao altera a analise.
     On Error Resume Next
     Application.PrintCommunication = False
     With ws.PageSetup
@@ -9294,6 +9467,7 @@ Public Sub GerarChecklistCKCP(Optional ByVal silencioso As Boolean = False)
         .Font.Bold = True: .Font.Size = 11: .Font.Color = corHdr
         .HorizontalAlignment = xlCenter
     End With
+    ' Best-effort (so formatacao visual): falha aqui nao altera a analise.
     On Error Resume Next
     With ws.Cells(2, 5).FormatConditions.AddDatabar
         .BarColor.Color = COR_UI_BARRA
