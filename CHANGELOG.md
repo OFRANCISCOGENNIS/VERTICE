@@ -2,7 +2,8 @@
 
 ## v0.2.0 (2026-10-21)
 
-Refatoração interna, **sem mudar nenhum resultado das análises**.
+Refatoração interna sem mudar resultados, mais a versão nova do `inventario.bas` (essa sim com
+regras novas — ver abaixo).
 
 ### Tabelas embutidas divididas (`AnaliseCKCP.bas`)
 
@@ -40,6 +41,17 @@ agora com comentário explicando:
   `FormatarVisualAba` e `GerarChecklistCKCP`, `PrepararImpressao`.
 
 Os demais `On Error Resume Next` já restauravam o tratamento logo após a linha que pode falhar.
+
+### `inventario.bas` atualizado
+
+Nova versão do módulo de inventário (os ajustes de `On Error` acima foram reaplicados por cima):
+
+- Discrepância de valor de material em PEP ODI: preço unitário de cada linha comparado com a
+  média do mesmo código (tolerância `DISCREP_VALOR_PCT`, padrão 30%). Vira seção própria no
+  RANKING DE RISCO e entra no SCORE (`PESO_DISCREP` / `CAP_DISCREP`) e no diagnóstico.
+- "LACRE P/ MEDIDOR" passa a ser classificado como lacre, não medidor (`EhMedidorODM`).
+- Desempenho: cache em `NormStr` e ordenação do ranking em O(n log n), mantendo a mesma ordem.
+- `EQUIV_VERSAO_ATUAL` = 5.
 
 ### Outros
 
