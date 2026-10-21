@@ -1,0 +1,4 @@
+# VBA: mantem os bytes exatos (Windows-1252 + CRLF) para importar no Excel
+*.bas -text
+*.xlsx binary
+*.xlsm binary
