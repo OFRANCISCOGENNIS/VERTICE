@@ -74,6 +74,8 @@ Private dTipoCls As Object  ' CLASSIFICACAO(CLS2 normalizada) -> TIPO (COM/UC/UA
 Private dFamEquiv As Object ' CLS2 servico (norm) -> familia material equivalente
 Private dSrvPuro As Object  ' CLS2 servico (norm) -> 1 (servico sem material esperado)
 Private dFamNivel As Object ' FAMILIA (norm) -> nivel (PRIMARIO/SECUNDARIO/NA)
+Private dTempos As Object   ' ETAPA/ABA -> segundos de processamento (cronometro)
+Private dLig As Object      ' COD (serv/mat) -> grupos de LIGACAO SERV X MAT ("1;4;")
 Private rawHeaders As Variant
 Private rawColCount As Long
 Private gSplashOK As Boolean
@@ -145,6 +147,8 @@ Private dDescSrv As Object     ' COD_SERVICO -> descricao (Denominacao)
 
 Sub GerarRelatorio()
     Dim t As Double: t = Timer
+    Dim ta As Double                      ' cronometro por aba
+    Set dTempos = CreateObject("Scripting.Dictionary")
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
     Application.DisplayAlerts = False
@@ -162,7 +166,7 @@ Sub GerarRelatorio()
     abasObsoletas = Array("RISCO", "ANOMALIAS", "ANALISE REGIONAL", _
                           "PEND CLASSIFICACAO", "RESUMO POR PEP", "CLASSIFICACAO", _
                           "MAT vs SERV AT", "PREMISSAS", "CLASSE DE CUSTO", _
-                          "PAINEL EXECUTIVO", "PORTFOLIO OBRA")
+                          "PAINEL EXECUTIVO", "PORTFOLIO OBRA", "RACIONALIZACAO COM")
     Dim ix As Long
     For ix = 0 To UBound(abasObsoletas)
         On Error Resume Next
@@ -196,6 +200,7 @@ Sub GerarRelatorio()
 
     ' 3b) Carrega o catalogo de MATERIAIS (FAMILIA, CLS1/2/3)
     gEtapa = "CarregarCatalogoMateriais": CarregarCatalogoMateriais
+    gEtapa = "PreencherClassifVazia": PreencherClassifVazia
 
     ' 3c) Descricoes embutidas de servico (prioridade) ANTES do catalogo externo,
     '     que preenche as descricoes faltantes a partir de TEXTO BREVE do arquivo.
@@ -222,27 +227,30 @@ Sub GerarRelatorio()
     gEtapa = "CarregarEquivSrvMat": CarregarEquivSrvMat
     gEtapa = "CarregarSrvPuro": CarregarSrvPuro
     gEtapa = "CarregarFamiliaNivel": CarregarFamiliaNivel
+    gEtapa = "CarregarLigacoesSrvMat": CarregarLigacoesSrvMat
+    dTempos("CARGA BASE + CATALOGOS") = Timer - t
 
-    ' 4) Gera cada aba
-    gEtapa = "Gerar_RazaoCJ": Gerar_RazaoCJ
-    gEtapa = "Gerar_AlertasCriticos": Gerar_AlertasCriticos
-    gEtapa = "Gerar_MaterialVsServico": Gerar_MaterialVsServico
-    gEtapa = "Gerar_Material": Gerar_Material
-    gEtapa = "Gerar_Servico": Gerar_Servico
-    gEtapa = "Gerar_AnaliseCA": Gerar_AnaliseCA
-    gEtapa = "Gerar_ServicoSemMaterial": Gerar_ServicoSemMaterial
-    gEtapa = "Gerar_NaoClassificados": Gerar_NaoClassificados
-    gEtapa = "Gerar_RacionalizacaoCOM": Gerar_RacionalizacaoCOM
-    gEtapa = "Gerar_Regras": Gerar_Regras
+    ' 4) Gera cada aba (cada chamada e cronometrada em dTempos)
+    gEtapa = "Gerar_RazaoCJ": ta = Timer: Gerar_RazaoCJ: dTempos("RAZAO CJ") = Timer - ta
+    gEtapa = "Gerar_AlertasCriticos": ta = Timer: Gerar_AlertasCriticos: dTempos("ALERTAS CRITICOS") = Timer - ta
+    gEtapa = "Gerar_MaterialVsServico": ta = Timer: Gerar_MaterialVsServico: dTempos("MATERIAL vs SERVICO") = Timer - ta
+    gEtapa = "Gerar_Material": ta = Timer: Gerar_Material: dTempos("MATERIAL") = Timer - ta
+    gEtapa = "Gerar_Servico": ta = Timer: Gerar_Servico: dTempos("SERVICO") = Timer - ta
+    gEtapa = "Gerar_AnaliseCA": ta = Timer: Gerar_AnaliseCA: dTempos("ANALISE DE CA") = Timer - ta
+    gEtapa = "Gerar_ServicoSemMaterial": ta = Timer: Gerar_ServicoSemMaterial: dTempos("SERVICO SEM MATERIAL") = Timer - ta
+    gEtapa = "Gerar_NaoClassificados": ta = Timer: Gerar_NaoClassificados: dTempos("NAO CLASSIFICADOS") = Timer - ta
+    ' RACIONALIZACAO COM removida (arquivo mais leve); a aba antiga e apagada em abasObsoletas.
+    gEtapa = "Gerar_Regras": ta = Timer: Gerar_Regras: dTempos("REGRAS") = Timer - ta
 
     ' Checklist do processo: criado automaticamente (preserva marcacoes se ja existir)
-    gEtapa = "GerarChecklistCKCP": GerarChecklistCKCP True
+    gEtapa = "GerarChecklistCKCP": ta = Timer: GerarChecklistCKCP True: dTempos("CHECKLIST CKCP") = Timer - ta
 
     ' FASE 5: ordena as guias por fluxo de leitura e ativa o painel
-    gEtapa = "OrganizarAbas": OrganizarAbas
+    gEtapa = "OrganizarAbas": ta = Timer: OrganizarAbas: dTempos("ORGANIZAR ABAS") = Timer - ta
 
     Application.Calculation = xlCalculationAutomatic
     Application.ScreenUpdating = True
+    gEtapa = "MostrarTempos": MostrarTempos (Timer - t)
     gEtapa = "MostrarTelaFuturista": MostrarTelaFuturista nLin, (Timer - t)
     GoTo Fim
 
@@ -333,6 +341,53 @@ Private Sub MostrarTelaFuturista(ByVal nLin As Long, ByVal seg As Double)
 
     ' O painel permanece na tela; o botao OK (FecharSplashCKCP) apaga as formas.
     On Error GoTo 0
+End Sub
+
+' Mostra o ranking de tempo de cada aba/etapa (descrescente) em uma MsgBox.
+' Desativavel pela chave CONFIG MOSTRAR_TEMPOS = 0.
+Private Sub MostrarTempos(ByVal totalSeg As Double)
+    If dTempos Is Nothing Then Exit Sub
+    If dTempos.Count = 0 Then Exit Sub
+    If CfgTxt("MOSTRAR_TEMPOS", "1") = "0" Then Exit Sub
+
+    ' copia chaves/valores para arrays e ordena por tempo (desc) - selection sort
+    Dim n As Long: n = dTempos.Count
+    Dim nomes() As String, secs() As Double, i As Long, j As Long, mx As Long
+    ReDim nomes(0 To n - 1): ReDim secs(0 To n - 1)
+    Dim kk As Variant: i = 0
+    For Each kk In dTempos.Keys
+        nomes(i) = CStr(kk): secs(i) = CDbl(dTempos(kk)): i = i + 1
+    Next kk
+    For i = 0 To n - 2
+        mx = i
+        For j = i + 1 To n - 1
+            If secs(j) > secs(mx) Then mx = j
+        Next j
+        If mx <> i Then
+            Dim ts As Double, tn As String
+            ts = secs(i): secs(i) = secs(mx): secs(mx) = ts
+            tn = nomes(i): nomes(i) = nomes(mx): nomes(mx) = tn
+        End If
+    Next i
+
+    Dim somaAbas As Double
+    For i = 0 To n - 1: somaAbas = somaAbas + secs(i): Next i
+    If totalSeg <= 0 Then totalSeg = somaAbas
+
+    Dim msg As String, pct As Double, pos As Long
+    msg = "TEMPO DE CARREGAMENTO POR ABA / ETAPA" & vbLf & _
+          "(ranking do mais lento para o mais rapido)" & vbLf & _
+          String(44, "-") & vbLf
+    For i = 0 To n - 1
+        pos = i + 1
+        pct = 0: If totalSeg > 0 Then pct = secs(i) / totalSeg * 100
+        msg = msg & Format$(pos, "00") & ". " & _
+              nomes(i) & String$(IIf(26 - Len(nomes(i)) > 1, 26 - Len(nomes(i)), 1), " ") & _
+              Format$(secs(i), "0.00") & "s   (" & Format$(pct, "0") & "%)" & vbLf
+    Next i
+    msg = msg & String(44, "-") & vbLf & _
+          "TEMPO TOTAL: " & Format$(totalSeg, "0.00") & "s"
+    MsgBox msg, vbInformation, "Tempos de processamento - CKCP"
 End Sub
 
 Private Sub AddTxt(ws As Worksheet, nm As String, L As Double, T As Double, _
@@ -593,6 +648,20 @@ Private Function LinhaTipoAplic(ByVal lin As Long) As String
 End Function
 
 Private Function MatInfoLinha(ByVal lin As Long, ByVal idx As Long) As String
+    ' Override fixo: 124030044 e 124180290 sempre CONECTOR / MAT. COM;
+    ' 179340003 (SUCATA POSTE MADEIRA) sempre POSTE RD / MAT. UC
+    Select Case NormCod(dados(lin, cMaterial))
+        Case "124030044", "124180290"
+            If idx >= 1 And idx <= 3 Then
+                MatInfoLinha = Choose(idx, "MATERIAL", "CONECTOR", "MAT. COM")
+                Exit Function
+            End If
+        Case "179340003"   ' SUCATA POSTE MADEIRA -> POSTE RD
+            If idx >= 1 And idx <= 3 Then
+                MatInfoLinha = Choose(idx, "MATERIAL", "POSTE RD", "MAT. UC")
+                Exit Function
+            End If
+    End Select
     MatInfoLinha = CatInfo(dados(lin, cMaterial), idx)
     If MatInfoLinha <> "" Then Exit Function
 
@@ -618,8 +687,10 @@ Private Function Cls2SrvOverride(codSrv As Variant) As String
     Cls2SrvOverride = ""
     Dim c As String: c = NormCod(codSrv)
     Select Case c
-        Case "5500000582", "5500000575"
+        Case "5500000582", "5500000575", "5500000576", "5500000581", "5500000572"
             Cls2SrvOverride = "COND PROT"
+        Case "5500000817"
+            Cls2SrvOverride = "EQUIPAMENTO MONOFASICO"
     End Select
 End Function
 
@@ -676,6 +747,32 @@ End Function
 '==============================================================================
 '  CATLOGO DE MATERIAIS (FAMILIA, CLS1, CLS2, CLS3)
 '==============================================================================
+' Linhas de material com "Classificacao" vazia no SAP (ex.: sucata em ODD:
+' 179340003 SUCATA POSTE MADEIRA) eram tratadas como servico. Se o codigo
+' esta no catalogo de materiais ou a classe de custo e de material (811...),
+' preenche UC/COM pelo CLS3 do catalogo para entrarem como MATERIAL.
+Private Sub PreencherClassifVazia()
+    If cClassif <= 0 Or cMaterial <= 0 Then Exit Sub
+    Dim i As Long, cod As String, c3 As String
+    For i = 1 To UBound(dados, 1)
+        If Trim$(CStr(dados(i, cClassif))) = "" Then
+            cod = NormCod(dados(i, cMaterial))
+            If cod <> "" And cod <> "0" Then
+                If cod = "179340003" Then
+                    dados(i, cClassif) = "UC"      ' SUCATA POSTE MADEIRA = POSTE RD (UC)
+                ElseIf CatInfo(cod, 1) <> "" Or Left$(TextoCampo(i, cClasse), 3) = "811" Then
+                    c3 = UCase$(CatInfo(cod, 3))
+                    If InStr(c3, "UC") > 0 Then
+                        dados(i, cClassif) = "UC"
+                    Else
+                        dados(i, cClassif) = "COM"
+                    End If
+                End If
+            End If
+        End If
+    Next i
+End Sub
+
 Private Sub CarregarCatalogoMateriais()
     Set dCatMat = CreateObject("Scripting.Dictionary")
 
@@ -1376,9 +1473,9 @@ Private Sub CarregarCatalogoServicos()
 
     Dim caminho As String
     caminho = CaminhoCatalogo("CAT_SERVICOS", _
+        "%USERPROFILE%\Downloads\SERVICOS_ATUAIS.xlsx;" & _
         "%USERPROFILE%\Downloads\SERVICOS_ATUAIS_3.xlsx;%USERPROFILE%\Downloads\SERVICOS_ATUAIS (3).xlsx;" & _
-        "%USERPROFILE%\Downloads\SERVICOS_ATUAIS_2.xlsx;%USERPROFILE%\Downloads\SERVICOS_ATUAIS (2).xlsx;" & _
-        "%USERPROFILE%\Downloads\SERVICOS_ATUAIS.xlsx")
+        "%USERPROFILE%\Downloads\SERVICOS_ATUAIS_2.xlsx;%USERPROFILE%\Downloads\SERVICOS_ATUAIS (2).xlsx")
     If caminho = "" Then
         Dim f As Variant
         f = Application.GetOpenFilename( _
@@ -1449,6 +1546,7 @@ Private Sub CarregarReclassificacaoServicos()
     ReclasSrv "5400099848", "SERVICO", "CONEXAO", "MAO DE OBRA"
     ReclasSrv "5400099851", "SERVICO", "CONEXAO", "MAO DE OBRA"
     ReclasSrv "5301800152", "SERVICO", "ALUGUEL GERADOR", "RISCO"
+    ReclasSrv "5500000817", "SERVICO", "EQUIPAMENTO MONOFASICO", "MAO DE OBRA"
 End Sub
 
 Private Sub ReclasSrv(ByVal cod As String, ByVal c1 As String, _
@@ -2379,6 +2477,93 @@ End Function
 Private Sub CarregarConversoesCabo()
     Set dCabo = CreateObject("Scripting.Dictionary")
 
+    ' Tabela de conversao embutida (CONVERSOES_CABO_ATUAIS): COD_MATERIAL -> fator
+    ' KG->metros. Usada so na aba MATERIAL vs SERVICO (MATERIAL fica em KG).
+    ' O arquivo externo (se existir) acrescenta codigos novos (embutido tem prioridade).
+    dCabo("1000353") = 4.63
+    dCabo("1000354") = 6.82
+    dCabo("1000355") = 10.81
+    dCabo("1000356") = 7.36
+    dCabo("1000357") = 2.13
+    dCabo("1000359") = 1.45
+    dCabo("1000363") = 17.39
+    dCabo("1000365") = 3.4
+    dCabo("1001939") = 16.949
+    dCabo("1002185") = 5.92
+    dCabo("1002186") = 3.26
+    dCabo("122010001") = 8.461
+    dCabo("122010004") = 8.065
+    dCabo("122020001") = 6.78
+    dCabo("122020002") = 10.76
+    dCabo("122020003") = 5.38
+    dCabo("122020004") = 2.13
+    dCabo("122020005") = 17.39
+    dCabo("122020006") = 3.4
+    dCabo("122020008") = 4.63
+    dCabo("122020010") = 7.36
+    dCabo("122020011") = 1.45
+    dCabo("122020012") = 11.68
+    dCabo("122020013") = 2.3
+    dCabo("122020014") = 1.02072
+    dCabo("122020016") = 2.91
+    dCabo("122020017") = 1.823
+    dCabo("122020019") = 17.39
+    dCabo("122020022") = 0.5456
+    dCabo("122020025") = 3.67
+    dCabo("122020031") = 1.7693
+    dCabo("122020051") = 0.788
+    dCabo("122020065") = 1.023
+    dCabo("122020066") = 2.739
+    dCabo("122020067") = 1.5037
+    dCabo("122020071") = 4.64
+    dCabo("122020093") = 1.24
+    dCabo("122020094") = 1.65289
+    dCabo("122020097") = 3.45
+    dCabo("122020102") = 4.76
+    dCabo("122020103") = 2.05339
+    dCabo("122020122") = 18.6
+    dCabo("122030004") = 7.042
+    dCabo("122030005") = 4.78
+    dCabo("122030006") = 3.25
+    dCabo("122030007") = 2.25
+    dCabo("122030009") = 1.65
+    dCabo("122030010") = 1.184
+    dCabo("122030011") = 8.47
+    dCabo("122070000") = 16.949
+    dCabo("122120029") = 1
+    dCabo("122210016") = 11.36
+    dCabo("122210017") = 11.49
+    dCabo("122210018") = 19.23
+    dCabo("122240036") = 1.447
+    dCabo("122250091") = 1.66
+    dCabo("122250092") = 3.31
+    dCabo("122250093") = 5.28
+    dCabo("122250121") = 3.13
+    dCabo("122250122") = 3.31
+    dCabo("122780009") = 8.14
+    dCabo("124560027") = 1
+    dCabo("144010001") = 5.56
+    dCabo("144010002") = 2.46
+    dCabo("144010003") = 2.46
+    dCabo("144010004") = 3.278
+    dCabo("144010005") = 3.26
+    dCabo("144010007") = 5.32
+    dCabo("144010011") = 3.28
+    dCabo("144010012") = 5.32
+    dCabo("144010032") = 5.32
+    dCabo("144010033") = 2.46
+    dCabo("144010034") = 0.31
+    dCabo("144010035") = 0.31
+    dCabo("144010036") = 5.32
+    dCabo("144010042") = 2.46
+    dCabo("310604") = 17.241
+    dCabo("310887") = 4.63
+    dCabo("310889") = 3.676
+    dCabo("310890") = 17.241
+    dCabo("310895") = 10.869
+    dCabo("310897") = 2.127
+    dCabo("310939") = 5.376
+
     Dim caminho As String
     caminho = CaminhoCatalogo("CAT_CABO", "%USERPROFILE%\Downloads\CONVERSOES_CABO_ATUAIS.xlsx")
     If caminho = "" Then Exit Sub   ' opcional: sem arquivo, segue sem converter
@@ -2415,6 +2600,12 @@ Private Function CaboFator(codMat As Variant) As Double
     CaboFator = 0
     If dCabo Is Nothing Then Exit Function
     Dim cod As String: cod = NormCod(codMat)
+    ' Fixos (prevalecem sobre o catalogo): QTD x fator (/3 desfeito: x3 de volta)
+    Select Case cod
+        Case "122020001": CaboFator = 6.78: Exit Function   ' CABO AL NU CA 1/0AWG POPPY (x6,78)
+        Case "122020008": CaboFator = 4.63: Exit Function   ' CABO NU AL CAA 1/0AWG RAVEN (x4,63)
+        Case "122020002": CaboFator = 10.76 / 3: Exit Function   ' CABO AL NU CA 2 AWG IRIS (x10,76/3)
+    End Select
     If dCabo.Exists(cod) Then CaboFator = dCabo(cod)
 End Function
 
@@ -2432,6 +2623,8 @@ Private Sub CarregarComboServico()
     ' O loop do arquivo usa Not dCombo.Exists(cod), entao estes prevalecem.
     dCombo("5500000582") = "3|"   ' equivale a 3 cabos -> multiplica QTD por 3
     dCombo("5500000575") = "3|"   ' equivale a 3 cabos -> multiplica QTD por 3
+    dCombo("5500000576") = "3|"   ' AHO202_B INST COND -> equivale a 3 cabos
+    dCombo("5500000581") = "3|"   ' AHO204_A INST RD COMPACT -> equivale a 3 cabos
 
     Dim caminho As String
     caminho = CaminhoCatalogo("CAT_COMBO", "%USERPROFILE%\Downloads\SRV_COMBO_ATUAIS.xlsx")
@@ -2480,6 +2673,8 @@ Private Function ComboFator(codSrv As Variant) As Double
     ComboFator = 1
     If dCombo Is Nothing Then Exit Function
     Dim cod As String: cod = NormCod(codSrv)
+    ' 5500000572 (AHO201_A INST CONDUTOR 16/50MM): 1:1 (sem conversao)
+    If cod = "5500000572" Then ComboFator = 1: Exit Function
     If Not dCombo.Exists(cod) Then Exit Function
     Dim p() As String: p = Split(dCombo(cod), "|")
     Dim fator As Double: fator = ToNum(p(0))
@@ -3447,6 +3642,78 @@ Private Function EhServicoPuro(ByVal cls2 As String) As Boolean
     EhServicoPuro = dSrvPuro.Exists(NormClassif(cls2))
 End Function
 
+Private Sub CarregarLigacoesSrvMat()
+    ' Grupos de LIGACAO SERV X MAT (planilha LIGACAO DE MATERIAL E SERVICO).
+    ' Codigos de servico e material do mesmo grupo, lancados no mesmo PEP4,
+    ' se conectam e ficam ADERENTES na aba MATERIAL vs SERVICO.
+    Set dLig = CreateObject("Scripting.Dictionary")
+    AddLig "5020000118", 1   ' SRV RET POSTE DE MADEIRA LM
+    AddLig "179340003", 1   ' MAT SUCATA POSTE MADEIRA
+    AddLig "5500000591", 2   ' SRV AHO208_B_RET CON 16 50MM2 CU/EQUIV AL-LM
+    AddLig "122020012", 2   ' MAT CABO NU AL CAA 4AWG SWAN MNT
+    AddLig "5020000093", 3   ' SRV RET POSTE CONCRETO ATE 14M LM
+    AddLig "5020000118", 3   ' SRV RET POSTE DE MADEIRA LM
+    AddLig "133000010", 4   ' MAT POSTE CONC DT B 9M 300DAN PDE
+    AddLig "133000006", 4   ' MAT POSTE CONC DT D 9M 150DAN PDE
+    AddLig "179340003", 4   ' MAT SUCATA POSTE MADEIRA
+    AddLig "5020000093", 4   ' SRV RET POSTE CONCRETO ATE 14M LM
+    AddLig "5020000118", 4   ' SRV RET POSTE DE MADEIRA LM
+    AddLig "122120029", 5   ' MAT CABO COB AL 185MM 15KV XLPE+HDPE+SMC
+    AddLig "122120033", 5   ' MAT CABO COB AL 50MM 15KV XLPE+HDPE+SMC
+    AddLig "5022000276", 5   ' SRV INST COND COBERTO RDC 35-70MM2 LM
+    AddLig "5022000278", 5   ' SRV INST COND COBERTO RDC 95-185MM2 LM
+    AddLig "5500000591", 6   ' SRV AHO208_B_RET CON 16 50MM2 CU/EQUIV AL-LM
+    AddLig "122020012", 6   ' MAT CABO NU AL CAA 4AWG SWAN MNT
+    AddLig "179340003", 7   ' MAT SUCATA POSTE MADEIRA
+    AddLig "5500000764", 7   ' SRV AHO805_B_RET POST PASS MT 10-15MT LV-LM
+    AddLig "5025300122", 8   ' SRV INST ESTR CP RELIGADOR/SEC 3F >400A LM
+    AddLig "102220046", 8   ' MAT TP IND 36,2KV 1,2P75 500VA G1 EXT PDE
+    AddLig "102310194", 8   ' MAT TP,13,8-11,4KV,EXT.GSCT004/21,EXC GO
+    AddLig "122020012", 9   ' MAT CABO NU AL CAA 4AWG SWAN MNT
+    AddLig "5500000590", 9   ' SRV AHO208_A_RET CON 16 50MM2 CU/EQUIV AL-LM
+    AddLig "105310001", 10   ' MAT CHAVE FUS C POR/POL 34,5KV 100A 5KA PDE
+    AddLig "105010022", 10   ' MAT CH SEC 1P VHI 36,2KV 630A 12,5KA RD PDE
+    AddLig "5500000617", 10   ' SRV AHO218_A_INST (FACA,FUSIVEIS,LAMINAS)-LM
+    AddLig "105310029", 11   ' MAT CH,FUS,36.2KV,100A,5KA,PORC,S.L,BLQ
+    AddLig "105000007", 11   ' MAT CHAVE SEC 1P 15KV 400A 12,5KA MHI(BLQ)
+    AddLig "5500000626", 11   ' SRV AHO221_A_RET (FACA, FUSIVEIS, LAMINA)-LM
+    AddLig "122020002", 12   ' MAT CABO AL NU CA 2 AWG IRIS
+    AddLig "122020003", 12   ' MAT CABO NU AL CA 2/0AWG ASTER MNT
+    AddLig "5500000591", 12   ' SRV AHO208_B_RET CON 16 50MM2 CU/EQUIV AL-LM
+    AddLig "105310001", 13   ' MAT CHAVE FUS C POR/POL 34,5KV 100A 5KA PDE
+    AddLig "5500000627", 13   ' SRV AHO221_B_RET (FACA, FUSIVEIS, LAMINA)-LM
+    AddLig "122020001", 14   ' MAT CABO AL NU CA 1/0AWG POPPY
+    AddLig "122020002", 14   ' MAT CABO AL NU CA 2 AWG IRIS
+    AddLig "5500000590", 14   ' SRV AHO208_A_RET CON 16 50MM2 CU/EQUIV AL-LM
+    AddLig "105010112", 15   ' MAT SECC,3F,SOB CARGA,24KV,630A,TELECOMAND
+    AddLig "5025300122", 15   ' SRV INST ESTR CP RELIGADOR/SEC 3F >400A LM
+    AddLig "101100031", 16   ' MAT RELIG 1F 15 KV 100A 6,3KA C/BASE C PDE
+    AddLig "5500000817", 16   ' SRV AHO823_A_INST EQ PROT 1F RRAIOMT/BTLV-LV
+    AddLig "101100031", 17   ' MAT RELIG 1F 15 KV 100A 6,3KA C/BASE C PDE
+    AddLig "5500000818", 17   ' SRV AHO823_B_INST EQ PROT 1F RRAIOMT/BTLV-LV
+    AddLig "5500000817", 18   ' SRV AHO823_A_INST EQ PROT 1F RRAIOMT/BTLV-LV
+    AddLig "104010001", 18   ' MAT PARA-RAIO DT POL 12KV 10KA 13,8KV PDE
+    AddLig "105010112", 19   ' MAT SECC,3F,SOB CARGA,24KV,630A,TELECOMAND
+    AddLig "5500000832", 19   ' SRV AHO828_A_INST/SEC RELIG S CX CONT LV-LV
+    AddLig "5500000479", 20   ' SRV AHO103_B_RET TIRAN POSTE MOCO MT/BT-LM
+    AddLig "134350002", 20   ' MAT HASTE ANC AC ZC 16X2400MM 90MM 5000DAN
+    AddLig "105300003", 21   ' MAT CHAVE FUS C POR/POL 13,8KV 100A 10KA PDE
+    AddLig "105300005", 21   ' MAT CHAVE FUS C 15KV 100A NBI 95KV 2KA(BLQ)
+    AddLig "5500000627", 21   ' SRV AHO221_B_RET (FACA, FUSIVEIS, LAMINA)-LM
+    AddLig "5025300147", 22   ' SRV INST ESTR CP TRAFO DT 3F LM
+    AddLig "105300003", 22   ' MAT CHAVE FUS C POR/POL 13,8KV 100A 10KA PDE
+    AddLig "104000004", 22   ' MAT PARARAIO BT POL ZNO 10KA 280V RD ISO PDE
+    AddLig "104010001", 22   ' MAT PARA-RAIO DT POL 12KV 10KA 13,8KV PDE
+    AddLig "5500000618", 23   ' SRV AHO218_B_INST (FACA,FUSIVEIS,LAMINAS)-LM
+    AddLig "105310001", 23   ' MAT CHAVE FUS C POR/POL 34,5KV 100A 5KA PDE
+End Sub
+
+Private Sub AddLig(ByVal cod As String, ByVal grupo As Long)
+    If dLig Is Nothing Then Set dLig = CreateObject("Scripting.Dictionary")
+    cod = NormCod(cod)
+    If InStr(";" & dLig(cod), ";" & grupo & ";") = 0 Then dLig(cod) = dLig(cod) & grupo & ";"
+End Sub
+
 Private Sub CarregarFamiliaNivel()
     ' Nivel da familia (FAMILIAS_ATUAIS): P=PRIMARIO, S=SECUNDARIO, demais=NA.
     Set dFamNivel = CreateObject("Scripting.Dictionary")
@@ -4124,15 +4391,18 @@ End Function
 ' COND ISOLADO e COND ISOLADO/PROT -> COND PROT.
 ' COND NU -> COND PROT: servico de cabo protegido cobre o material cabo nu
 ' e vice-versa (ambos sao condutores de linha, o servico paga os dois).
-Private Function FamiliaAlias(ByVal cls2 As String) As String
+Private Function FamiliaAlias(ByVal cls2 As String, _
+                              Optional ByVal ehMaterial As Boolean = False) As String
     Dim k As String: k = NormClassif(cls2)
     Select Case k
-        Case "COND ISOLADO/PROT", "COND ISOLADO": FamiliaAlias = "COND PROT"
+        Case "COND ISOLADO/PROT", "COND ISOLADO", "COND NU": FamiliaAlias = "COND PROT"
         Case Else
-            FamiliaAlias = cls2
-            ' De-para servico -> material equivalente (CarregarEquivSrvMat)
-            If Not dFamEquiv Is Nothing Then
-                If dFamEquiv.Exists(k) Then FamiliaAlias = dFamEquiv(k)
+            FamiliaAlias = k
+            ' De-para servico -> material equivalente (CarregarEquivSrvMat).
+            ' So para SERVICO: a familia de MATERIAL fica como esta (senao o
+            ' material CONECTOR virava RAMAL e o servico CONEXAO->CONECTOR ficava sem par).
+            If Not ehMaterial And Not dFamEquiv Is Nothing Then
+                If dFamEquiv.Exists(k) Then FamiliaAlias = NormClassif(dFamEquiv(k))
             End If
     End Select
 End Function
@@ -4142,6 +4412,39 @@ Private Function EhCabo(ByVal cls2 As String) As Boolean
     Dim s As String: s = NormClassif(cls2)
     EhCabo = (Left$(s, 5) = "COND " Or Left$(s, 5) = "CABO " _
               Or s = "RAMAL")
+End Function
+
+' Familias criticas: NAO ADERENTE em qualquer PEP4 (ODD/ODI/ODM/ODS) reprova o PEP3.
+Private Function FamiliaCritica(ByVal cls2 As String) As Boolean
+    Select Case NormClassif(cls2)
+        Case "POSTE RD", "TRAFO", "PARA RAIO MT", "CH FUS", "COND NU", "MEDIDOR", _
+             "KIT PLPT", "POSTE PDR ACO", "PARA RAIO BT", "COND COBRE", "CH SU FACA", _
+             "RELIGADOR", "TP_TC", "COND PROT", "COND ISOLADO", "SECCIONADOR", _
+             "BATERIA", "REGULADOR", "POSTE CAPITEL", "CH FUS RELIG"
+            FamiliaCritica = True
+    End Select
+End Function
+
+' 5025300148 (RET ESTR CP TRAFO DT 3F): cada servico paga 3 retiradas de
+' CH FUS e 3 de PARA RAIO MT. Aderente se MAT <= SRV da familia + 3 x qtd.
+Private Function CobreRetTrafo3F(dRet As Object, ByVal pep4 As String, ByVal cls2 As String, _
+                                 ByVal mv As Double, ByVal sv As Double) As Boolean
+    CobreRetTrafo3F = False
+    If Not dRet.Exists(pep4) Then Exit Function
+    Select Case NormClassif(cls2)
+        Case "CH FUS", "PARA RAIO MT"
+            If Abs(mv) <= Abs(sv) + 3 * CDbl(dRet(pep4)) + 0.001 Then CobreRetTrafo3F = True
+    End Select
+End Function
+
+' 122060001 CABO ACO COBREADO: abaixo de 10 kg no PEP4 nao reprova.
+' O restante do material da familia ainda precisa caber no servico.
+Private Function AcoCobreadoIsento(dKg As Object, dM As Object, ByVal k As String, _
+                                   ByVal mv As Double, ByVal sv As Double) As Boolean
+    AcoCobreadoIsento = False
+    If Not dKg.Exists(k) Then Exit Function
+    If Abs(CDbl(dKg(k))) >= 10 Then Exit Function
+    If Abs(mv - CDbl(dM(k))) <= Abs(sv) + 0.001 Then AcoCobreadoIsento = True
 End Function
 
 ' Familias que o servico de RELIGADOR torna aderentes (ate 60 m por religador)
@@ -4291,14 +4594,27 @@ Private Sub Gerar_MaterialVsServico()
     Dim dFamTipo As Object: Set dFamTipo = CreateObject("Scripting.Dictionary")
     ' dFamKey: FAMILIA (campo do catalogo de materiais) por chave PEP|CLS2
     Dim dFamKey As Object: Set dFamKey = CreateObject("Scripting.Dictionary")
+    ' Ligacao SERV x MAT (grupos da planilha LIGACAO DE MATERIAL E SERVICO)
+    Dim dLigMat As Object:  Set dLigMat = CreateObject("Scripting.Dictionary")
+    Dim dLigSrv As Object:  Set dLigSrv = CreateObject("Scripting.Dictionary")
+    Dim dLigKeyN As Object: Set dLigKeyN = CreateObject("Scripting.Dictionary")
+    Dim codLig As String, lgP() As String, lgI As Long
     Dim cls3m As String, famN As String
+    ' 122060001 (cabo aco cobreado): < 10 kg no PEP4 nao reprova a familia
+    Dim dAcoKg As Object: Set dAcoKg = CreateObject("Scripting.Dictionary")
+    Dim dAcoM As Object:  Set dAcoM = CreateObject("Scripting.Dictionary")
+    ' PEP4 com servico de equipamento de protecao (5500000820/5500000817)
+    Dim dEqProt As Object: Set dEqProt = CreateObject("Scripting.Dictionary")
+    ' PEP4 -> qtd do servico 5025300148 (RET ESTR CP TRAFO DT 3F): cada um paga
+    ' 3 retiradas de CH FUS e 3 retiradas de PARA RAIO MT
+    Dim dRetTr3F As Object: Set dRetTr3F = CreateObject("Scripting.Dictionary")
     For i = 1 To UBound(dados, 1)
         pep = Trim$(CStr(dados(i, cPEP))): If pep = "" Then GoTo Prox
         q = ToNum(dados(i, cQtd))
         If EhMaterial(CStr(dados(i, cClassif))) Then
             cls2 = MatInfoLinha(i, 2)                  ' CLS2 do catalogo/base enriquecida
             If cls2 = "" Then cls2 = "(SEM CLS2)"
-            cls2 = FamiliaAlias(cls2)                  ' unifica familias equivalentes
+            cls2 = FamiliaAlias(cls2, True)                  ' unifica familias equivalentes
             ' TIPO por CLS3 do item (MAT. UC / MAT. COM); UC prevalece
             cls3m = UCase$(MatInfoLinha(i, 3))
             famN = NormClassif(cls2)
@@ -4313,6 +4629,10 @@ Private Sub Gerar_MaterialVsServico()
             k = pep & "|" & cls2
             dMat(k) = dMat(k) + q
             dKeys(k) = 1
+            If NormCod(dados(i, cMaterial)) = "122060001" Then
+                dAcoKg(k) = dAcoKg(k) + ToNum(dados(i, cQtd))
+                dAcoM(k) = dAcoM(k) + q
+            End If
             If q < 0 Then dNeg(k) = 1
             ' FAMILIA do catalogo de materiais (idx 0) - material tem prioridade
             Dim famM As String: famM = MatInfoLinha(i, 0)
@@ -4332,8 +4652,89 @@ Private Sub Gerar_MaterialVsServico()
             ' marca que este PEP4 tem pelo menos um servico lancado
             If Not dPep4TemSrv.Exists(pep) Then dPep4TemSrv(pep) = 1
         End If
+        If Not EhMaterial(CStr(dados(i, cClassif))) And q <> 0 Then
+            Select Case NormCod(dados(i, cMaterial))
+                Case "5500000820", "5500000817": dEqProt(pep) = 1
+                Case "5025300148": dRetTr3F(pep) = dRetTr3F(pep) + Abs(q)
+            End Select
+        End If
+        ' LIGACAO SERV X MAT: registra os grupos de ligacao do codigo neste PEP4
+        ' (dLigMat/dLigSrv: PEP4|grupo presente; dLigKeyN: PEP4|CLS2 -> grupos)
+        If Not dLig Is Nothing Then
+            codLig = NormCod(dados(i, cMaterial))
+            If dLig.Exists(codLig) And (q <> 0 Or ToNum(dados(i, cValor)) <> 0) Then
+                lgP = Split(CStr(dLig(codLig)), ";")
+                For lgI = 0 To UBound(lgP)
+                    If lgP(lgI) <> "" Then
+                        If EhMaterial(CStr(dados(i, cClassif))) Then
+                            dLigMat(pep & "|" & lgP(lgI)) = 1
+                        Else
+                            dLigSrv(pep & "|" & lgP(lgI)) = 1
+                        End If
+                        If InStr(";" & dLigKeyN(k), ";" & lgP(lgI) & ";") = 0 Then _
+                            dLigKeyN(k) = dLigKeyN(k) & lgP(lgI) & ";"
+                    End If
+                Next lgI
+            End If
+        End If
 Prox:
     Next i
+
+    ' Grupo de ligacao FECHADO no PEP4 = tem material E servico do grupo lancados.
+    ' dLigKeyOk: PEP4|CLS2 -> numeros dos grupos fechados (ex.: "1, 4").
+    Dim dLigKeyOk As Object: Set dLigKeyOk = CreateObject("Scripting.Dictionary")
+    Dim kLg As Variant, pepLg As String, sLg As String
+    For Each kLg In dLigKeyN.Keys
+        pepLg = Split(CStr(kLg), "|")(0)
+        lgP = Split(CStr(dLigKeyN(kLg)), ";")
+        sLg = ""
+        For lgI = 0 To UBound(lgP)
+            If lgP(lgI) <> "" Then
+                If dLigMat.Exists(pepLg & "|" & lgP(lgI)) And dLigSrv.Exists(pepLg & "|" & lgP(lgI)) Then
+                    sLg = sLg & IIf(sLg = "", "", ", ") & lgP(lgI)
+                End If
+            End If
+        Next lgI
+        If sLg <> "" Then dLigKeyOk(kLg) = sLg
+    Next kLg
+
+    ' Servicos 5500000820/5500000817 estao ligados aos materiais CH FUS,
+    ' CH SU FACA, PARA RAIO e RELIGADOR (817 era CLS2 RELIGADOR no catalogo):
+    ' familias cobertas no PEP4 -> ADERENTES.
+    Dim kEq As Variant, famEq As String
+    For Each kEq In dKeys.Keys
+        If dEqProt.Exists(Split(CStr(kEq), "|")(0)) Then
+            famEq = NormClassif(Split(CStr(kEq), "|")(1))
+            Select Case famEq
+                Case "CH FUS", "CH SU FACA", "CH FACA", "PARA RAIO", "PARA RAIO AT", _
+                     "PARA RAIO MT", "PARA RAIO BT", "RELIGADOR"
+                    If Not dLigKeyOk.Exists(kEq) Then dLigKeyOk(kEq) = "EQP"
+            End Select
+        End If
+    Next kEq
+
+    ' CH FUS x CH SU FACA sao ligadas: no PEP4, soma MAT e SRV das duas familias;
+    ' se o total de MAT bate com o total de SRV (margem), as duas ficam ADERENTES.
+    Dim dFxM As Object: Set dFxM = CreateObject("Scripting.Dictionary")
+    Dim dFxS As Object: Set dFxS = CreateObject("Scripting.Dictionary")
+    Dim pFx As String, kFx As Variant
+    For Each kFx In dKeys.Keys
+        Select Case NormClassif(Split(CStr(kFx), "|")(1))
+            Case "CH FUS", "CH SU FACA"
+                pFx = Split(CStr(kFx), "|")(0)
+                If dMat.Exists(kFx) Then dFxM(pFx) = dFxM(pFx) + Abs(dMat(kFx))
+                If dSrv.Exists(kFx) Then dFxS(pFx) = dFxS(pFx) + Abs(dSrv(kFx))
+        End Select
+    Next kFx
+    For Each kFx In dKeys.Keys
+        Select Case NormClassif(Split(CStr(kFx), "|")(1))
+            Case "CH FUS", "CH SU FACA"
+                pFx = Split(CStr(kFx), "|")(0)
+                If dFxM(pFx) > 0 And dFxS(pFx) > 0 And DentroMargem(dFxM(pFx), dFxS(pFx)) Then
+                    If Not dLigKeyOk.Exists(kFx) Then dLigKeyOk(kFx) = "CH FUS/FACA"
+                End If
+        End Select
+    Next kFx
 
     Dim ks As Variant: ks = dKeys.Keys
 
@@ -4424,6 +4825,24 @@ Prox:
                 End If
         End Select
     Next r
+
+    ' CH FUS esperado por PEP a partir dos trafos instalados: cada TRAFO
+    ' monofasico (1F/1-2F) espera 1 chave fusivel; TRIFASICO (3F) espera 3.
+    ' Conta pela qtd de material da familia TRAFO e a fase vem do texto breve.
+    Dim dChFusEsp As Object: Set dChFusEsp = CreateObject("Scripting.Dictionary")
+    Dim iTF As Long, pepTF As String, qTF As Double, txTF As String, fatTF As Long
+    For iTF = 1 To UBound(dados, 1)
+        pepTF = Trim$(CStr(dados(iTF, cPEP))): If pepTF = "" Then GoTo ProxTF
+        If Not EhMaterial(CStr(dados(iTF, cClassif))) Then GoTo ProxTF
+        If NormClassif(FamiliaAlias(MatInfoLinha(iTF, 2), True)) <> "TRAFO" Then GoTo ProxTF
+        qTF = ToNum(dados(iTF, cQtd))
+        If qTF <= 0 Then GoTo ProxTF            ' so instalacao (qtd positiva)
+        txTF = UCase$(SemAcento(TextoCampo(iTF, cTexto)))
+        fatTF = 1
+        If InStr(txTF, "3F") > 0 Or InStr(txTF, "TRIF") > 0 Then fatTF = 3
+        dChFusEsp(pepTF) = dChFusEsp(pepTF) + qTF * fatTF
+ProxTF:
+    Next iTF
     ' Servicos especificos que cobrem acessorios de TRAFO (CH FUS, PARA RAIO MT/BT):
     ' 5500200645 - servico de inst/troca de trafo, paga os acessorios.
     ' d572Fam: pep4 -> familia do servico 5500000572 (para regra SRV>MAT=REPROVADO)
@@ -4460,7 +4879,7 @@ ProxSE:
     For iEQ = 1 To UBound(dados, 1)
         pepEQ = Trim$(CStr(dados(iEQ, cPEP))): If pepEQ = "" Then GoTo ProxEQ
         If EhMaterial(CStr(dados(iEQ, cClassif))) Then
-            clsEQ = NormClassif(FamiliaAlias(MatInfoLinha(iEQ, 2)))
+            clsEQ = NormClassif(FamiliaAlias(MatInfoLinha(iEQ, 2), True))
         Else
             clsEQ = NormClassif(FamiliaAlias(SrvInfoLinha(iEQ, 1)))
         End If
@@ -4482,7 +4901,7 @@ ProxEQ:
         pv = Split(ks(r), "|")
         pep4v = CStr(pv(0)): clsv = CStr(pv(1))
         Select Case NormClassif(clsv)
-            Case "COND NU"
+            Case "COND NU", "COND PROT"   ' COND NU agora unificado em COND PROT
                 sv = 0: If dSrv.Exists(ks(r)) Then sv = dSrv(ks(r))
                 dCondNuSrv(pep4v) = dCondNuSrv(pep4v) + Abs(sv)
             Case "CORDOALHA"
@@ -4538,16 +4957,28 @@ ProxEQ:
             ' COND COBRE como aterramento de PARA RAIO BT/MT, REGULADOR ou TRAFO.
             If Not aderiu And NormClassif(clsv) = "COND COBRE" _
                And dEquipPep.Exists(pep4v) Then aderiu = True
-            ' TRAFO / REGULADOR: servico de trafo/regulador cobre CH FUS,
-            ' PARA RAIO MT e PARA RAIO BT (o servico paga pelos acessorios).
+            ' TRAFO / REGULADOR: servico de trafo/regulador cobre PARA RAIO MT/BT.
             If Not aderiu And trafRegCov.Exists(pep4v) Then
                 Select Case NormClassif(clsv)
-                    Case "CH FUS", "PARA RAIO MT", "PARA RAIO BT"
+                    Case "PARA RAIO MT", "PARA RAIO BT"
                         aderiu = True
                 End Select
             End If
+            ' CH FUS: trafo instalado espera N chaves fusiveis (1F=1 / 3F=3).
+            ' Aderente se a qtd de CH FUS material nao exceder o esperado.
+            If Not aderiu And NormClassif(clsv) = "CH FUS" And dChFusEsp.Exists(pep4v) Then
+                If Abs(mv) <= CDbl(dChFusEsp(pep4v)) + 0.001 Then aderiu = True
+            End If
             ' CH FUS paga por servico especifico (5500000618 / 5500200645)
             If Not aderiu And chFusCov.Exists(pep4v) And NormClassif(clsv) = "CH FUS" Then aderiu = True
+            ' LIGACAO SERV X MAT: grupo de ligacao fechado no PEP4 (material + servico)
+            If Not aderiu And dLigKeyOk.Exists(ks(r)) Then aderiu = True
+            ' 122060001 < 10 kg: desconsiderado; o restante do MAT deve caber no SRV
+            If Not aderiu Then aderiu = AcoCobreadoIsento(dAcoKg, dAcoM, ks(r), mv, sv)
+            If Not aderiu Then aderiu = CobreRetTrafo3F(dRetTr3F, pep4v, clsv, mv, sv)
+            ' CABO ISOLADO < 15 nao reprova (independe de haver servico)
+            If Not aderiu And NormClassif(clsv) = "CABO ISOLADO" _
+               And Abs(mv) < 15 And Abs(sv) < 15 Then aderiu = True
             ' TRAFO / REGULADOR (MAT) coberto por SRV de TRAFO_OU_REGULADOR no PEP.
             If Not aderiu And dTrafOrRegSrv.Exists(pep4v) And dTrafHasMatPep.Exists(pep4v) _
                And (NormClassif(clsv) = "TRAFO" Or NormClassif(clsv) = "REGULADOR") Then aderiu = True
@@ -4660,14 +5091,17 @@ ProxEQ:
         Next r
     End If
 
-    Dim outp() As Variant: ReDim outp(0 To nKeep, 1 To 15)
-    outp(0, 1) = "STATUS_PEP4": outp(0, 2) = "PEP3NIVEL": outp(0, 3) = "PEP4NIVEL"
+    Dim outp() As Variant: ReDim outp(0 To nKeep, 1 To 16)
+    outp(0, 1) = "STATUS_PEP3NIVEL": outp(0, 2) = "PEP3NIVEL": outp(0, 3) = "PEP4NIVEL"
     outp(0, 4) = "CLS2": outp(0, 5) = "TIPO"
     outp(0, 6) = "MAT": outp(0, 7) = "SRV": outp(0, 8) = "DIFERENCA"
     outp(0, 9) = "SITUACAO": outp(0, 10) = "TIPO_PEP": outp(0, 11) = "PI"
     outp(0, 12) = "OBS1": outp(0, 13) = "OBS2": outp(0, 14) = "FAMILIA": outp(0, 15) = "NVL_FAM"
+    outp(0, 16) = "LIGACAO SERV X MAT"
 
     Dim rr As Long, p As Variant, pp As String, mq As Double, sq As Double, dif As Double
+    ' dP3Crit: PEP3 -> familias criticas NAO ADERENTES (ex.: "TRAFO (.D)")
+    Dim dP3Crit As Object: Set dP3Crit = CreateObject("Scripting.Dictionary")
     Dim p3MvS As String
     rr = 0
     For r = 0 To dKeys.Count - 1
@@ -4745,14 +5179,29 @@ ProxEQ:
             outp(rr, 8) = dif
             outp(rr, 9) = "ADERENTE"   ' cabo de conexao da CH SU FACA (7 m por servico)
         ElseIf trafRegCov.Exists(pp) And _
-               (NormClassif(CStr(p(1))) = "CH FUS" Or _
-                NormClassif(CStr(p(1))) = "PARA RAIO MT" Or _
+               (NormClassif(CStr(p(1))) = "PARA RAIO MT" Or _
                 NormClassif(CStr(p(1))) = "PARA RAIO BT") Then
             outp(rr, 8) = dif
-            outp(rr, 9) = "ADERENTE"   ' acessorio coberto por SRV de TRAFO/REGULADOR
+            outp(rr, 9) = "ADERENTE"   ' para-raio coberto por SRV de TRAFO/REGULADOR
+        ElseIf NormClassif(CStr(p(1))) = "CH FUS" And dChFusEsp.Exists(pp) _
+               And Abs(mq) <= CDbl(dChFusEsp(pp)) + 0.001 Then
+            outp(rr, 8) = dif
+            outp(rr, 9) = "ADERENTE"   ' CH FUS dentro do esperado pelos trafos (1F=1/3F=3)
         ElseIf chFusCov.Exists(pp) And NormClassif(CStr(p(1))) = "CH FUS" Then
             outp(rr, 8) = dif
             outp(rr, 9) = "ADERENTE"   ' CH fusivel paga por servico (5500000618/5500200645)
+        ElseIf dLigKeyOk.Exists(ks(r)) Then
+            outp(rr, 8) = dif
+            outp(rr, 9) = "ADERENTE"   ' grupo LIGACAO SERV X MAT fechado no PEP4
+        ElseIf AcoCobreadoIsento(dAcoKg, dAcoM, ks(r), mq, sq) Then
+            outp(rr, 8) = dif
+            outp(rr, 9) = "ADERENTE"   ' 122060001 < 10 kg nao reprova
+        ElseIf NormClassif(CStr(p(1))) = "CABO ISOLADO" And Abs(mq) < 15 And Abs(sq) < 15 Then
+            outp(rr, 8) = dif
+            outp(rr, 9) = "ADERENTE"   ' CABO ISOLADO < 15 nao reprova
+        ElseIf CobreRetTrafo3F(dRetTr3F, pp, CStr(p(1)), mq, sq) Then
+            outp(rr, 8) = dif
+            outp(rr, 9) = "ADERENTE"   ' 5025300148 paga 3 CH FUS + 3 PARA RAIO MT
         ElseIf dTrafOrRegSrv.Exists(pp) And dTrafHasMatPep.Exists(pp) And _
                (NormClassif(CStr(p(1))) = "TRAFO" Or _
                 NormClassif(CStr(p(1))) = "REGULADOR") Then
@@ -4772,6 +5221,17 @@ ProxEQ:
         End If
         outp(rr, 10) = TipoPEPCodigo(pp)
         outp(rr, 11) = SegmentoPI(pp)
+
+        ' Familia critica NAO ADERENTE em qualquer tipo de PEP (ODD/ODI/ODM/ODS)
+        ' -> reprova o PEP3 (aplicado no pos-processamento do STATUS).
+        If CStr(outp(rr, 9)) = "NAO ADERENTE" And FamiliaCritica(CStr(p(1))) Then
+            Dim critTx As String: critTx = CStr(p(1)) & " (" & Right$(pp, 2) & ")"
+            Dim critAt As String: critAt = CStr(dP3Crit(PEP3(pp)))
+            If InStr(critAt, critTx) = 0 Then
+                If critAt <> "" Then critAt = critAt & ", "
+                dP3Crit(PEP3(pp)) = critAt & critTx
+            End If
+        End If
 
         ' OBS1: motivo do REPROVADO
         Dim obs1 As String: obs1 = ""
@@ -4811,6 +5271,8 @@ ProxEQ:
         ' FAMILIA (campo do catalogo de materiais); vazio p/ chave so de servico
         outp(rr, 14) = IIf(dFamKey.Exists(ks(r)), CStr(dFamKey(ks(r))), "")
         outp(rr, 15) = FamiliaNivel(CStr(p(1)))   ' nivel da familia (FAMILIAS_ATUAIS)
+        ' LIGACAO SERV X MAT: numero(s) do grupo de ligacao fechado nesta linha
+        If dLigKeyOk.Exists(ks(r)) Then outp(rr, 16) = CStr(dLigKeyOk(ks(r)))
 
         ' -------------------------------------------------------------------
         ' FASE 1.2: alimenta os vereditos ODI em memoria, replicando a regra
@@ -4833,6 +5295,47 @@ ProxEQ:
         End If
 PulaNulo:
     Next r
+
+    ' STATUS_PEP3NIVEL (col 1): o PEP3 so e APROVADO se TODOS os PEP4NIVEL
+    ' estiverem aprovados; basta um PEP4 REPROVADO para reprovar todo o PEP3.
+    ' (col 2 = PEP3NIVEL). Aplica o mesmo status em todas as linhas do PEP3.
+    Dim dP3St As Object: Set dP3St = CreateObject("Scripting.Dictionary")
+    Dim z As Long, p3z As String
+    For z = 1 To rr
+        p3z = CStr(outp(z, 2))
+        If CStr(outp(z, 1)) = "REPROVADO" Then
+            dP3St(p3z) = "REPROVADO"
+        ElseIf Not dP3St.Exists(p3z) Then
+            dP3St(p3z) = "APROVADO"
+        End If
+    Next z
+    ' Familia critica NAO ADERENTE (qualquer PEP4) reprova o PEP3
+    Dim kc As Variant
+    For Each kc In dP3Crit.Keys
+        If CStr(dP3Crit(kc)) <> "" Then
+            dP3St(CStr(kc)) = "REPROVADO"
+            dMvSVerd(CStr(kc)) = "REPROVADO"
+        End If
+    Next kc
+    For z = 1 To rr
+        p3z = CStr(outp(z, 2))
+        outp(z, 1) = dP3St(p3z)
+        If dP3Crit.Exists(p3z) Then
+            If CStr(dP3Crit(p3z)) <> "" Then
+                If FamiliaCritica(CStr(outp(z, 4))) And CStr(outp(z, 9)) = "NAO ADERENTE" _
+                   And InStr(CStr(outp(z, 12)), "Familia critica") = 0 Then
+                    outp(z, 12) = "Familia critica NAO ADERENTE" & _
+                        IIf(CStr(outp(z, 12)) = "", "", " | " & CStr(outp(z, 12)))
+                End If
+                If Left$(CStr(outp(z, 13)), 13) = "PEP3 APROVADO" Then
+                    outp(z, 13) = "PEP3 REPROVADO: familia critica NAO ADERENTE: " & CStr(dP3Crit(p3z))
+                ElseIf InStr(CStr(outp(z, 13)), "familia critica") = 0 Then
+                    outp(z, 13) = CStr(outp(z, 13)) & " ; familia critica NAO ADERENTE: " & CStr(dP3Crit(p3z))
+                End If
+            End If
+        End If
+    Next z
+
     EscreverAba "MATERIAL vs SERVICO", outp
 End Sub
 
@@ -5134,6 +5637,23 @@ Prox:
     Dim ks As Variant: ks = dFirst.Keys
     Dim r As Long, fi As Long, q As Double, val As Double
 
+    ' Preco medio por MATERIAL (somente ODI e ODM): soma |VALOR| / soma |QTD|
+    Dim dPmV As Object: Set dPmV = CreateObject("Scripting.Dictionary")
+    Dim dPmQ As Object: Set dPmQ = CreateObject("Scripting.Dictionary")
+    Dim codPm As String
+    For r = 0 To dFirst.Count - 1
+        Select Case TipoPEPCodigo(Split(CStr(ks(r)), "|")(0))
+            Case "I", "M"
+            Case Else: GoTo ProxPm
+        End Select
+        If Round(dQ(ks(r)), 2) <> 0 Then
+            codPm = Split(CStr(ks(r)), "|")(1)
+            dPmV(codPm) = dPmV(codPm) + Abs(dV(ks(r)))
+            dPmQ(codPm) = dPmQ(codPm) + Abs(dQ(ks(r)))
+        End If
+ProxPm:
+    Next r
+
     ' 1a passada: conta as linhas que ficam (exclui QTD=0 e VALOR=0)
     Dim nKeep As Long
     For r = 0 To dFirst.Count - 1
@@ -5147,13 +5667,15 @@ Prox:
 PulaConta:
     Next r
 
-    Dim outp() As Variant: ReDim outp(0 To nKeep, 1 To 15)
+    Dim outp() As Variant: ReDim outp(0 To nKeep, 1 To 21)
     outp(0, 1) = "PEP4NIVEL": outp(0, 2) = "PEP3": outp(0, 3) = "TIPO_PEP"
     outp(0, 4) = "CLASSE_CUSTO": outp(0, 5) = "MATERIAL": outp(0, 6) = "TEXTO_MATERIAL"
     outp(0, 7) = "UML": outp(0, 8) = "QTD_ENTRADA": outp(0, 9) = "VALOR_MOEDA"
     outp(0, 10) = "CLASSIFICACAO": outp(0, 11) = "CLS2"
     outp(0, 12) = "PRECO_UNITARIO": outp(0, 13) = "ADERENCIA"
     outp(0, 14) = "SITUACAO": outp(0, 15) = "OBS_SITUACAO"
+    outp(0, 16) = "QTD_MVS": outp(0, 17) = "CLS2_MVS": outp(0, 18) = "CONVERSAO_MVS"
+    outp(0, 19) = "PRECO_MEDIO_MATERIAL": outp(0, 20) = "DIF_MEDIA_%": outp(0, 21) = "ALERTA_PRECO"
 
     Dim rr As Long: rr = 0
     For r = 0 To dFirst.Count - 1
@@ -5198,6 +5720,42 @@ PulaConta:
             Dim sitP() As String: sitP = Split(sitS, "|")
             outp(rr, 14) = CLng(sitP(0))
             outp(rr, 15) = sitP(1)
+        End If
+        ' Conversao para a MATERIAL vs SERVICO (mesma regra de Gerar_MaterialVsServico):
+        ' QTD_MVS = QTD x fator de cabo (KG -> M); CLS2_MVS = familia apos unificacao.
+        Dim fatM As Double: fatM = CaboFator(dados(fi, cMaterial))
+        outp(rr, 17) = FamiliaAlias(MatInfoLinha(fi, 2), True)
+        If fatM > 0 Then
+            outp(rr, 16) = Round(dQ(k) * fatM, 2)
+            If NormCod(dados(fi, cMaterial)) = "122020008" Then
+                outp(rr, 18) = "QTD x 4,63 (KG -> M)"
+            ElseIf NormCod(dados(fi, cMaterial)) = "122020001" Then
+                outp(rr, 18) = "QTD x 6,78 (KG -> M)"
+            ElseIf NormCod(dados(fi, cMaterial)) = "122020002" Then
+                outp(rr, 18) = "QTD x 10,76 / 3 (KG -> M)"
+            Else
+                outp(rr, 18) = "QTD x " & Format$(fatM, "0.0###") & " (KG -> M)"
+            End If
+        Else
+            outp(rr, 16) = q
+            outp(rr, 18) = "SEM CONVERSAO (1:1)"
+        End If
+        If NormClassif(CStr(outp(rr, 17))) <> NormClassif(CStr(outp(rr, 11))) Then
+            outp(rr, 18) = outp(rr, 18) & " | familia " & CStr(outp(rr, 11)) & " -> " & CStr(outp(rr, 17))
+        End If
+        ' Preco unitario x media do material: diferenca > 30% -> ALERTA (so ODI/ODM)
+        Dim codA As String: codA = NormCod(dados(fi, cMaterial))
+        Dim tpA As String: tpA = TipoPEPCodigo(pep)
+        If (tpA = "I" Or tpA = "M") And dPmQ.Exists(codA) And q <> 0 Then
+            If dPmQ(codA) > 0 Then
+                Dim pMed As Double: pMed = dPmV(codA) / dPmQ(codA)
+                outp(rr, 19) = Round(pMed, 4)
+                If pMed > 0 Then
+                    Dim difPm As Double: difPm = (Abs(dV(k) / dQ(k)) - pMed) / pMed
+                    outp(rr, 20) = Round(difPm * 100, 1)
+                    outp(rr, 21) = IIf(Abs(difPm) > 0.3, "ALERTA > 30%", "OK")
+                End If
+            End If
         End If
 PulaLin:
     Next r
@@ -5252,6 +5810,7 @@ Private Sub Gerar_Servico()
     ' Linhas sem COD_SERVICO nao sao trazidas.
     Dim dQ As Object, dV As Object, dFirst As Object
     Set dQ = CreateObject("Scripting.Dictionary")
+    Dim dQraw As Object: Set dQraw = CreateObject("Scripting.Dictionary")   ' QTD crua (p/ QTD_MVS)
     Set dV = CreateObject("Scripting.Dictionary")
     Set dFirst = CreateObject("Scripting.Dictionary")   ' chave -> indice da 1a linha
 
@@ -5266,7 +5825,7 @@ Private Sub Gerar_Servico()
         pep = Trim$(CStr(dados(i, cPEP))): If pep = "" Then GoTo Prox
         If EhMaterial(CStr(dados(i, cClassif))) Then
             ' poste (material) do PEP -> numero de postes
-            If NormClassif(FamiliaAlias(MatInfoLinha(i, 2))) = "POSTE RD" Then _
+            If NormClassif(FamiliaAlias(MatInfoLinha(i, 2), True)) = "POSTE RD" Then _
                 dPosteMat(pep) = dPosteMat(pep) + Abs(ToNum(dados(i, cQtd)))
             GoTo Prox
         End If
@@ -5275,10 +5834,26 @@ Private Sub Gerar_Servico()
         famSv = NormClassif(FamiliaAlias(SrvInfoLinha(i, 1)))
         If famSv = "ESCAVACAO" Then dCava(pep) = dCava(pep) + Abs(ToNum(dados(i, cQtd)))
         If famSv = "POSTE RD" Then dPosteSrv(pep) = dPosteSrv(pep) + Abs(ToNum(dados(i, cQtd)))
-        If codSrv = "" Or codSrv = "0" Then GoTo Prox   ' sem COD_SERVICO -> nao traz
-        k = pep & "|" & codSrv
+        If codSrv = "" Or codSrv = "0" Then
+            ' Sem COD_SERVICO: so traz se for servico de fato (CLS1=SERVICO ou
+            ' CLS3=MAO DE OBRA) -> mantem CA/indiretos fora. Agrupa por descricao.
+            Dim cls1s As String: cls1s = UCase$(SemAcento(SrvInfoLinha(i, 0)))
+            Dim cls3s As String: cls3s = UCase$(SemAcento(SrvInfoLinha(i, 2)))
+            If InStr(cls1s, "SERVICO") = 0 And InStr(cls3s, "MAO DE OBRA") = 0 Then GoTo Prox
+            k = pep & "|SC|" & UCase$(Trim$(TextoCampo(i, cTexto)))
+        Else
+            k = pep & "|" & codSrv
+        End If
         If Not dFirst.Exists(k) Then dFirst(k) = i
-        dQ(k) = dQ(k) + ToNum(dados(i, cQtd)) * ComboFator(dados(i, cMaterial))
+        ' QTD crua (UN) na aba SERVICO; exceto 5500000576/5500000581 (x3 tambem aqui).
+        ' Os demais combos so se aplicam na MATERIAL vs SERVICO.
+        Select Case codSrv
+            Case "5500000576", "5500000581"
+                dQ(k) = dQ(k) + ToNum(dados(i, cQtd)) * 3
+            Case Else
+                dQ(k) = dQ(k) + ToNum(dados(i, cQtd))
+        End Select
+        dQraw(k) = dQraw(k) + ToNum(dados(i, cQtd))
         dV(k) = dV(k) + ToNum(dados(i, cValor))
 Prox:
     Next i
@@ -5292,7 +5867,7 @@ Prox:
         If Not (Round(dQ(ks(r)), 2) = 0 And Round(dV(ks(r)), 2) = 0) Then nKeep = nKeep + 1
     Next r
 
-    Dim outp() As Variant: ReDim outp(0 To nKeep, 1 To 17)
+    Dim outp() As Variant: ReDim outp(0 To nKeep, 1 To 20)
     outp(0, 1) = "PEP4NIVEL": outp(0, 2) = "PEP3": outp(0, 3) = "TIPO_PEP"
     outp(0, 4) = "COD_SERVICO": outp(0, 5) = "DESCRICAO_SERVICO"
     outp(0, 6) = "CLASSE_CUSTO"
@@ -5301,6 +5876,7 @@ Prox:
     outp(0, 13) = "TIPO_APLICACAO": outp(0, 14) = "GRUPO_PERC"
     outp(0, 15) = "ALERTA_VALOR": outp(0, 16) = "APROPRIACAO"
     outp(0, 17) = "ADERENCIA"
+    outp(0, 18) = "QTD_MVS": outp(0, 19) = "CLS2_MVS": outp(0, 20) = "CONVERSAO_MVS"
 
     ki = 0
     Dim codSrvOut As String, und As String, taSrv As String, tpPep As String
@@ -5388,6 +5964,25 @@ Prox:
                                Format$(qPoste, "0.##") & ")"
             End If
         End If
+        ' Conversao para a MATERIAL vs SERVICO (mesma regra de Gerar_MaterialVsServico):
+        ' QTD_MVS = QTD crua x fator COMBO; CLS2_MVS = familia apos equivalencia.
+        Dim fatS As Double: fatS = ComboFator(dados(fi, cMaterial))
+        outp(ki, 18) = Round(dQraw(k) * fatS, 2)
+        outp(ki, 19) = FamiliaAlias(SrvInfoLinha(fi, 1))
+        If Abs(fatS - 1) < 0.000001 Then
+            outp(ki, 20) = "SEM CONVERSAO (1:1)"
+        ElseIf Abs(fatS - 1 / 3) < 0.000001 Then
+            outp(ki, 20) = "QTD / 3"
+        Else
+            outp(ki, 20) = "QTD x " & Format$(fatS, "0.####") & " (COMBO)"
+        End If
+        Select Case codSrvOut
+            Case "5500000576", "5500000581"
+                outp(ki, 20) = outp(ki, 20) & " | x3 ja aplicado na QTD_ENTRADA"
+        End Select
+        If NormClassif(CStr(outp(ki, 19))) <> NormClassif(CStr(outp(ki, 11))) Then
+            outp(ki, 20) = outp(ki, 20) & " | familia " & CStr(outp(ki, 11)) & " -> " & CStr(outp(ki, 19))
+        End If
 PulaZero:
     Next r
     EscreverAba "SERVICO", outp
@@ -5423,7 +6018,7 @@ Private Sub Gerar_AlertasCriticos()
     For i = 1 To UBound(dados, 1)
         pep = Trim$(CStr(dados(i, cPEP))): If pep = "" Then GoTo ProxUAR
         If Not EhMaterial(CStr(dados(i, cClassif))) Then GoTo ProxUAR
-        cls2u = FamiliaAlias(MatInfoLinha(i, 2))
+        cls2u = FamiliaAlias(MatInfoLinha(i, 2), True)
         If UCase$(TipoDaClassif(cls2u, TextoCampo(i, cTexto))) = "UAR" Then dPepUAR(pep) = 1
 ProxUAR:
     Next i
@@ -5435,7 +6030,7 @@ ProxUAR:
         If TipoPEPCodigo(pep) = "D" Then GoTo PreCalc
         If Not dPepTodos.Exists(pep) Then dPepTodos(pep) = 1
         If EhMaterial(CStr(dados(i, cClassif))) Then
-            cls2 = FamiliaAlias(MatInfoLinha(i, 2))
+            cls2 = FamiliaAlias(MatInfoLinha(i, 2), True)
             Dim tUC As String: tUC = UCase$(TipoDaClassif(cls2, TextoCampo(i, cTexto)))
             ' Fallback: familia sem TIPO -> usa CLS3 do catalogo (MAT. UC)
             If tUC = "" And InStr(UCase$(MatInfoLinha(i, 3)), "UC") > 0 Then tUC = "UC"
@@ -5927,6 +6522,23 @@ Private Sub Gerar_Regras()
     s = s & "ADERENCIA|RAMAL (75 m por servico)|Cada servico de RAMAL contempla ate 75 m de material RAMAL. Se MAT <= SRV x 75, o RAMAL fica ADERENTE." & vbLf
     s = s & "ADERENCIA|RAMAL cobre cabo (30 m por servico)|Cada servico de RAMAL libera 30 m. Se SRV(RAMAL) x 30 cobrir (>=) o total de cabo do PEP, os cabos/condutores ficam ADERENTES." & vbLf
     s = s & "ADERENCIA|RELIGADOR (60 m por servico)|Cada servico de RELIGADOR libera 60 m para tornar aderentes COND PROT, CABO ISOLADO e COND COBRE (2 servicos = 120 m, etc.)." & vbLf
+    s = s & "ADERENCIA|TRAFO -> CH FUS (1F=1 / 3F=3)|Cada trafo instalado espera chaves fusiveis: monofasico (1F) = 1 CH FUS; trifasico (3F) = 3 CH FUS. A fase vem do texto do trafo. CH FUS e ADERENTE se a qtd de material nao exceder o esperado pelos trafos do PEP. PARA RAIO MT/BT seguem cobertos pelo servico de trafo/regulador." & vbLf
+    s = s & "ADERENCIA|LIGACAO SERV X MAT|Grupos de ligacao (planilha LIGACAO DE MATERIAL E SERVICO) unem codigos de servico e material, inclusive de familias diferentes. Quando o PEP4 tem material E servico do mesmo grupo lancados, a ligacao fecha: as linhas dessas familias ficam ADERENTES e a coluna LIGACAO SERV X MAT mostra o numero do grupo." & vbLf
+    s = s & "ADERENCIA|CABO ACO COBREADO < 10 KG|Material 122060001 com menos de 10 kg no PEP4 nao reprova a familia (o restante do material ainda deve caber no servico)." & vbLf
+    s = s & "ADERENCIA|SRV 5500000820/817 x CH FUS, CH FACA, PARA RAIO|Servicos 5500000820 e 5500000817 estao ligados aos materiais das familias CH FUS, CH SU FACA, PARA RAIO e RELIGADOR: com um deles lancado no PEP4, essas familias ficam ADERENTES (LIGACAO = EQP)." & vbLf
+    s = s & "ADERENCIA|COND NU = COND PROT|As familias COND NU e COND PROT sao tratadas como similares: material e servico de uma cobrem os da outra (unificadas em COND PROT na MATERIAL vs SERVICO)." & vbLf
+    s = s & "VEREDITO PEP|Familias criticas|POSTE RD, TRAFO, PARA RAIO MT/BT, CH FUS, COND NU, MEDIDOR, KIT PLPT, POSTE PDR ACO, COND COBRE, CH SU FACA, RELIGADOR, TP_TC, COND PROT, COND ISOLADO, SECCIONADOR, BATERIA, REGULADOR, POSTE CAPITEL e CH FUS RELIG: NAO ADERENTE em qualquer PEP4 (ODD, ODI, ODM ou ODS) reprova o PEP3." & vbLf
+    s = s & "CLASSIFICACAO|Classificacao vazia (sucata ODD)|Lancamento com Classificacao vazia mas com codigo de material no catalogo (ou classe de custo 811...) e tratado como MATERIAL (UC/COM pelo CLS3). Ex.: 179340003 SUCATA POSTE MADEIRA entra como POSTE RD." & vbLf
+    s = s & "UNIFICACAO DE FAMILIAS|Equivalencias so para servico|O de-para EQUIV_SRV_MAT (CONEXAO->CONECTOR, ESTRUT RDC->ESPACADOR LOSAG, ESTRUT MT S/CRUZ->CRUZETA, CONECTOR->RAMAL...) vale apenas para a familia do SERVICO. Nomes de familia sao comparados sem acento (ESPACADOR = ESPACADOR com cedilha)." & vbLf
+    s = s & "ADERENCIA|5025300148 RET ESTR CP TRAFO DT 3F|Cada servico 5025300148 no PEP4 paga 3 retiradas de CH FUS e 3 retiradas de PARA RAIO MT: essas familias ficam ADERENTES se MAT <= SRV da familia + 3 x qtd do servico." & vbLf
+    s = s & "QUANTIDADE|Cabos 122020001 / 122020008|Na MATERIAL vs SERVICO: 122020001 (POPPY) = QTD x 6,78; 122020008 (RAVEN) = QTD x 4,63; 122020002 (IRIS) = QTD x 10,76 / 3. Na aba MATERIAL continuam em KG." & vbLf
+    s = s & "ADERENCIA|CH FUS x CH SU FACA|Familias ligadas: no PEP4 soma MAT e SRV de CH FUS + CH SU FACA; se o total de MAT bate com o de SRV (margem), as duas ficam ADERENTES (LIGACAO = CH FUS/FACA). Ex.: CH FUS MAT 1 + CH SU FACA SRV 1." & vbLf
+    s = s & "ADERENCIA|CABO ISOLADO < 15|Na MATERIAL vs SERVICO, CABO ISOLADO com MAT e SRV menores que 15 fica ADERENTE (nao reprova), mesmo sem servico lancado." & vbLf
+    s = s & "ABA MATERIAL|QTD_MVS / CLS2_MVS / CONVERSAO_MVS|Mostram como cada material entra na MATERIAL vs SERVICO: quantidade convertida (cabos KG x fator = metros), familia apos unificacao (ex.: COND NU -> COND PROT) e a formula aplicada." & vbLf
+    s = s & "ABA SERVICO|QTD_MVS / CLS2_MVS / CONVERSAO_MVS|Mostram como cada servico entra na MATERIAL vs SERVICO: quantidade com fator COMBO (ex.: x3, /3), familia apos equivalencia (ex.: CONEXAO -> CONECTOR) e a formula aplicada." & vbLf
+    s = s & "ABA MATERIAL|ALERTA_PRECO (media +-30%)|Somente ODI e ODM. PRECO_MEDIO_MATERIAL = soma |VALOR| / soma |QTD| do material nos PEPs ODI/ODM. DIF_MEDIA_% compara o preco unitario da linha com essa media; acima de 30% (para mais ou para menos) -> ALERTA > 30%." & vbLf
+    s = s & "QUANTIDADE|SRV x3 (576/581)|Servicos 5500000576 e 5500000581 equivalem a 3 cabos: QTD x3 na aba SERVICO e na MATERIAL vs SERVICO (familia COND PROT)." & vbLf
+    s = s & "CLASSIFICACAO|OVERRIDES FIXOS|Materiais 124030044 e 124180290 = CONECTOR / MAT. COM. Material 179340003 (SUCATA POSTE MADEIRA) = POSTE RD / MAT. UC. Servico 5500000817 = CLS2 EQUIPAMENTO MONOFASICO. Servico 5500000572 = CLS2 COND PROT, QTD 1:1 (sem conversao)." & vbLf
     s = s & "ADERENCIA|COND NU + CORDOALHA|O servico de COND NU contempla o material CORDOALHA no mesmo PEP." & vbLf
     s = s & "ADERENCIA|CH SU FACA (PI = ERD)|Em PI do tipo ERD, cada servico de RELIGADOR deixa aderentes ate 6 CH SU FACA." & vbLf
     s = s & "ADERENCIA|COND COBRE como conexao da CH SU FACA|Quando ha servico de CH SU FACA no PEP, o COND COBRE (conexao) fica ADERENTE." & vbLf
@@ -6440,7 +7052,7 @@ Private Sub Gerar_ServicoSemMaterial()
     For i = 1 To UBound(dados, 1)
         pepSM = Trim$(CStr(dados(i, cPEP))): If pepSM = "" Then GoTo P1
         If EhMaterial(CStr(dados(i, cClassif))) Then
-            cls2SM = FamiliaAlias(MatInfoLinha(i, 2))
+            cls2SM = FamiliaAlias(MatInfoLinha(i, 2), True)
             If cls2SM = "" Then cls2SM = "(SEM CLS2)"
             kSM = pepSM & "|" & cls2SM
             dMatSM(kSM) = dMatSM(kSM) + Abs(ToNum(dados(i, cQtd)))
@@ -6770,293 +7382,6 @@ ProxNC:
 End Sub
 
 
-'==============================================================================
-'  ABA: RACIONALIZACAO COM
-'  Valida materiais COM contra gabaritos de proporcao NT.006 (13,8kV).
-'  Para cada PEP4 + material COM, verifica se a quantidade esta dentro da
-'  faixa esperada em relacao a sua ancora (ex.: 2-3 isoladores por cruzeta).
-'
-'  Status possiveis:
-'    ANCORA          — material de referencia (ex.: CRUZETA)
-'    OK              — dentro da faixa NT.006 (±10%)
-'    EXCESSO         — acima da faixa maxima
-'    INSUFICIENTE    — abaixo da faixa minima
-'    SEM ANCORA      — ancora nao lancada no mesmo PEP
-'    ESTORNO SEM ENTRADA — qtd liquida negativa
-'    QTD ZERO        — qtd liquida = 0
-'    SEM REFERENCIA  — material nao mapeado no NT.006
-'==============================================================================
-Private Sub Gerar_RacionalizacaoCOM()
-
-    ' --- Carrega mapa NT.006 ---
-    Dim nt006RC As Object: Set nt006RC = CriarMapaNT006_RC()
-
-    ' --- Consolida COMs por PEP4 + COD_MATERIAL (qtd liquida) ---
-    Dim dQRC As Object: Set dQRC = CreateObject("Scripting.Dictionary")
-    Dim dInfoRC As Object: Set dInfoRC = CreateObject("Scripting.Dictionary")
-
-    Dim i As Long, pepRC As String, matRC As String, kRC As String, qRC As Double
-    For i = 1 To UBound(dados, 1)
-        pepRC = Trim$(CStr(dados(i, cPEP))): If pepRC = "" Then GoTo ProxRC
-        If UCase$(Trim$(CStr(dados(i, cClassif)))) <> "COM" Then GoTo ProxRC
-        matRC = NormCod(dados(i, cMaterial))
-        If matRC = "" Or matRC = "0" Then GoTo ProxRC
-        qRC = ToNum(dados(i, cQtd))
-        kRC = pepRC & "|" & matRC
-        dQRC(kRC) = dQRC(kRC) + qRC
-        If Not dInfoRC.Exists(kRC) Then
-            dInfoRC(kRC) = Array(pepRC, ValorCampo(i, cTexto), ValorCampo(i, cUML))
-        End If
-ProxRC:
-    Next i
-
-    ' --- Calcula ancoras por PEP4 + familia ---
-    Dim dAncRC As Object: Set dAncRC = CreateObject("Scripting.Dictionary")
-    Dim kvRC As Variant
-    For Each kvRC In dQRC.Keys
-        Dim pvRC() As String: pvRC = Split(CStr(kvRC), "|")
-        Dim p4RC As String: p4RC = CStr(pvRC(0))
-        Dim mRC As String: mRC = CStr(pvRC(1))
-        If nt006RC.Exists(mRC) Then
-            Dim tmRC As Object: Set tmRC = nt006RC(mRC)
-            If CBool(tmRC("EhAncora")) Then
-                Dim aKRC As String: aKRC = p4RC & "|" & CStr(tmRC("Familia"))
-                dAncRC(aKRC) = dAncRC(aKRC) + CDbl(dQRC(kvRC))
-            End If
-        End If
-    Next kvRC
-
-    ' --- Monta output (sem pre-ordenacao; OrdenarAba cuida do sort) ----------
-    Dim nRC As Long: nRC = dQRC.Count
-    Dim outpRC() As Variant: ReDim outpRC(0 To nRC, 1 To 15)
-    outpRC(0, 1)  = "PEP4NIVEL":         outpRC(0, 2)  = "PEP3NIVEL"
-    outpRC(0, 3)  = "COD_MATERIAL":      outpRC(0, 4)  = "DESCRICAO_MATERIAL"
-    outpRC(0, 5)  = "UML":               outpRC(0, 6)  = "QTD_LIQUIDA"
-    outpRC(0, 7)  = "FAMILIA_NT006":     outpRC(0, 8)  = "COD_NT006"
-    outpRC(0, 9)  = "DESCRICAO_NT006":   outpRC(0, 10) = "ANCORA_FAMILIA"
-    outpRC(0, 11) = "QTD_ANCORA":        outpRC(0, 12) = "FAIXA_MIN"
-    outpRC(0, 13) = "FAIXA_MAX":         outpRC(0, 14) = "REGRA_NT006"
-    outpRC(0, 15) = "STATUS_VALIDACAO"
-
-    Dim rrRC As Long: rrRC = 0
-    For Each kvRC In dQRC.Keys
-        kRC = CStr(kvRC)
-        pvRC = Split(kRC, "|")
-        p4RC = CStr(pvRC(0)): mRC = CStr(pvRC(1))
-        Dim qtdLRC As Double: qtdLRC = CDbl(dQRC(kRC))
-        Dim infRC As Variant: infRC = dInfoRC(kRC)
-
-        Dim famRC As String: famRC = "SEM REFERENCIA"
-        Dim codNTRC As String: codNTRC = "-"
-        Dim descrNTRC As String: descrNTRC = ""
-        Dim ancFamRC As String: ancFamRC = ""
-        Dim qtdAncRC As Double: qtdAncRC = 0
-        Dim fMinRC As Double: fMinRC = 0
-        Dim fMaxRC As Double: fMaxRC = 0
-        Dim regraRC As String: regraRC = ""
-        Dim statusRC As String: statusRC = "SEM REFERENCIA"
-        Dim ehAncRC As Boolean: ehAncRC = False
-
-        If nt006RC.Exists(mRC) Then
-            Dim tmRCv As Object: Set tmRCv = nt006RC(mRC)
-            famRC    = CStr(tmRCv("Familia"))
-            codNTRC  = CStr(tmRCv("CodNT006"))
-            descrNTRC = CStr(tmRCv("DescrNT006"))
-            ehAncRC  = CBool(tmRCv("EhAncora"))
-            regraRC  = CStr(tmRCv("DescrRegra"))
-            ancFamRC = CStr(tmRCv("AncoraDep"))
-
-            If ehAncRC Then
-                If qtdLRC < 0 Then
-                    statusRC = "ESTORNO SEM ENTRADA"
-                ElseIf qtdLRC = 0 Then
-                    statusRC = "QTD ZERO"
-                Else
-                    statusRC = "ANCORA"
-                End If
-            Else
-                Dim ancKRC As String: ancKRC = p4RC & "|" & ancFamRC
-                If dAncRC.Exists(ancKRC) Then
-                    qtdAncRC = CDbl(dAncRC(ancKRC))
-                    fMinRC = qtdAncRC * CDbl(tmRCv("RazaoMin")) * 0.9
-                    fMaxRC = qtdAncRC * CDbl(tmRCv("RazaoMax")) * 1.1
-                    If qtdLRC < 0 Then
-                        statusRC = "ESTORNO SEM ENTRADA"
-                    ElseIf qtdAncRC <= 0 Then
-                        statusRC = "SEM ANCORA"
-                    ElseIf qtdLRC < fMinRC Then
-                        statusRC = "INSUFICIENTE"
-                    ElseIf qtdLRC > fMaxRC Then
-                        statusRC = "EXCESSO"
-                    Else
-                        statusRC = "OK"
-                    End If
-                Else
-                    statusRC = "SEM ANCORA"
-                    ancFamRC = ancFamRC & " (nao lancada)"
-                End If
-            End If
-        End If
-
-        rrRC = rrRC + 1
-        outpRC(rrRC, 1)  = p4RC
-        outpRC(rrRC, 2)  = PEP3(p4RC)
-        outpRC(rrRC, 3)  = mRC
-        outpRC(rrRC, 4)  = CStr(infRC(1))
-        outpRC(rrRC, 5)  = CStr(infRC(2))
-        outpRC(rrRC, 6)  = Round(qtdLRC, 3)
-        outpRC(rrRC, 7)  = famRC
-        outpRC(rrRC, 8)  = codNTRC
-        outpRC(rrRC, 9)  = descrNTRC
-        outpRC(rrRC, 10) = ancFamRC
-        outpRC(rrRC, 11) = IIf(qtdAncRC > 0, Round(qtdAncRC, 3), "")
-        outpRC(rrRC, 12) = IIf(fMinRC > 0, Round(fMinRC, 2), "")
-        outpRC(rrRC, 13) = IIf(fMaxRC > 0, Round(fMaxRC, 2), "")
-        outpRC(rrRC, 14) = regraRC
-        outpRC(rrRC, 15) = statusRC
-    Next kvRC
-
-    EscreverAba "RACIONALIZACAO COM", outpRC
-
-    ' --- Colore coluna STATUS apos escrita (FASE 3.1: em blocos) -------------
-    ' Le a coluna ja ORDENADA da planilha e agrupa statuses contiguos.
-    Dim wsRC As Worksheet: Set wsRC = ActiveWorkbook.Worksheets("RACIONALIZACAO COM")
-    If rrRC >= 1 Then
-        Dim ultRC As Long: ultRC = rrRC + 1
-        Dim arrSt As Variant
-        If ultRC = 2 Then
-            ReDim arrSt(1 To 1, 1 To 1)
-            arrSt(1, 1) = wsRC.Cells(2, 15).Value
-        Else
-            arrSt = wsRC.Range(wsRC.Cells(2, 15), wsRC.Cells(ultRC, 15)).Value
-        End If
-        Dim stAnt As String, stCur As String, iniSt As Long, rr2 As Long
-        stAnt = Chr$(1): iniSt = 1
-        For rr2 = 1 To UBound(arrSt, 1)
-            stCur = UCase$(Trim$(CStr(arrSt(rr2, 1))))
-            If stCur <> stAnt Then
-                If rr2 > 1 Then PintarStatusRC wsRC, iniSt + 1, rr2, stAnt
-                stAnt = stCur: iniSt = rr2
-            End If
-        Next rr2
-        PintarStatusRC wsRC, iniSt + 1, UBound(arrSt, 1) + 1, stAnt
-    End If
-End Sub
-
-
-'==============================================================================
-'  MAPA NT.006 — retorna Dictionary: codSAP -> Dictionary com campos do material
-'  Usa Dictionary aninhado em vez de Type para compatibilidade com o modulo.
-'==============================================================================
-Private Function CriarMapaNT006_RC() As Object
-    Dim d As Object: Set d = CreateObject("Scripting.Dictionary")
-
-    ' Helper interno
-    ' AddMatRC d, cod, familia, nt006, descr, ehAncora, ancDep, rMin, rMax, regra
-
-    ' === CRUZETAS (ancora) ===
-    AddMatRC d, "133100007", "CRUZETA", "R-02", "Cruzeta concreto T 1900mm",    True,  "",             0,   0,   ""
-    AddMatRC d, "133100001", "CRUZETA", "R-02", "Cruzeta concreto L 1700mm",    True,  "",             0,   0,   ""
-    AddMatRC d, "133100006", "CRUZETA", "R-02", "Cruzeta concreto T 2200mm",    True,  "",             0,   0,   ""
-    AddMatRC d, "133400012", "CRUZETA", "R-02", "Cruzeta PRFV 90x112,5 2,4m",  True,  "",             0,   0,   ""
-    AddMatRC d, "133400003", "CRUZETA", "R-02", "Cruzeta PRFV",                 True,  "",             0,   0,   ""
-    AddMatRC d, "133400004", "CRUZETA", "R-02", "Cruzeta PRFV",                 True,  "",             0,   0,   ""
-
-    ' === ISOLADOR PILAR: 2-3 por cruzeta ===
-    AddMatRC d, "123140003", "ISOLADOR PILAR", "I-05", "Isolador pilar 15kV M16",    False, "CRUZETA", 2, 3.5, "2-3 iso. pilar por cruzeta (N1=3)"
-    AddMatRC d, "123140016", "ISOLADOR PILAR", "I-05", "Isolador pilar 24,2kV M16",  False, "CRUZETA", 2, 3.5, "2-3 iso. pilar por cruzeta"
-    AddMatRC d, "123140015", "ISOLADOR PILAR", "I-05", "Isolador pilar polim. 25kV", False, "CRUZETA", 2, 3.5, "2-3 iso. pilar por cruzeta"
-    AddMatRC d, "123140014", "ISOLADOR PILAR", "I-05", "Isolador pilar",             False, "CRUZETA", 2, 3.5, "2-3 iso. pilar por cruzeta"
-
-    ' === ISOLADOR SUSPENSAO (ancora) ===
-    AddMatRC d, "123230001", "ISOL SUSPENSAO", "I-06", "Isolador suspensao polim. 15kV", True, "", 0, 0, ""
-    AddMatRC d, "123230002", "ISOL SUSPENSAO", "I-06", "Isolador suspensao",             True, "", 0, 0, ""
-
-    ' === ARRUELA: 2-8 por cruzeta ===
-    AddMatRC d, "134830013", "ARRUELA", "A-02", "Arruela quad. 38x38x3mm F18", False, "CRUZETA", 2, 9, "2-8 arruelas por cruzeta"
-    AddMatRC d, "134830014", "ARRUELA", "A-02", "Arruela quad. lis 18x50x3mm", False, "CRUZETA", 2, 9, "2-8 arruelas por cruzeta"
-    AddMatRC d, "134830051", "ARRUELA", "A-02", "Arruela red pres M18",        False, "CRUZETA", 2, 9, "2-8 arruelas por cruzeta"
-
-    ' === PARAFUSO: 1-8 por cruzeta ===
-    AddMatRC d, "134700040", "PARAFUSO", "F-30", "Parafuso cab qd 125mm M16x2", False, "CRUZETA", 1, 8, "1-8 parafusos por cruzeta"
-    AddMatRC d, "134700043", "PARAFUSO", "F-30", "Parafuso cab qd 200mm M16x2", False, "CRUZETA", 1, 8, "1-8 parafusos por cruzeta"
-    AddMatRC d, "134700046", "PARAFUSO", "F-30", "Parafuso cab qd 250mm M16x2", False, "CRUZETA", 1, 8, "1-8 parafusos por cruzeta"
-    AddMatRC d, "134700047", "PARAFUSO", "F-30", "Parafuso cab qd 300mm M16x2", False, "CRUZETA", 1, 8, "1-8 parafusos por cruzeta"
-    AddMatRC d, "134700049", "PARAFUSO", "F-30", "Parafuso cab qd 400mm M16x2", False, "CRUZETA", 1, 8, "1-8 parafusos por cruzeta"
-    AddMatRC d, "134700028", "PARAFUSO", "F-30", "Parafuso cab abaul 16x45mm",  False, "CRUZETA", 1, 8, "1-8 parafusos por cruzeta"
-    AddMatRC d, "134700030", "PARAFUSO", "F-30", "Parafuso cab abaul 16x150mm", False, "CRUZETA", 1, 8, "1-8 parafusos por cruzeta"
-    AddMatRC d, "134700082", "PARAFUSO", "F-30", "Parafuso rosca dupla 16x500", False, "CRUZETA", 1, 8, "1-8 parafusos por cruzeta"
-
-    ' === PINO: 2-3 por cruzeta ===
-    AddMatRC d, "134280005", "PINO", "F-36", "Pino iso pilar autotrav M16x2", False, "CRUZETA", 2, 3.5, "~3 pinos por cruzeta (1 por isolador pilar)"
-    AddMatRC d, "134280002", "PINO", "F-37", "Pino curto suporte topo",       False, "CRUZETA", 1, 2.5, "1-2 pinos curtos por cruzeta"
-
-    ' === PORCA: 2-6 por cruzeta ===
-    AddMatRC d, "134800002", "PORCA", "A-21", "Porca quad. M16x2", False, "CRUZETA", 2, 6.5, "2-6 porcas por cruzeta"
-
-    ' === SELA DE CRUZETA: 2-4 por cruzeta ===
-    AddMatRC d, "134380004", "SELA CRUZETA", "-", "Sela cruzeta 110x116mm", False, "CRUZETA", 2, 4, "2-3 selas por cruzeta trifasica"
-    AddMatRC d, "134380005", "SELA CRUZETA", "-", "Sela cruzeta",           False, "CRUZETA", 2, 4, "2-3 selas por cruzeta"
-
-    ' === MAO FRANCESA: 1-2 por cruzeta ===
-    AddMatRC d, "134100006", "MAO FRANCESA", "-", "Mao francesa plana 726x38x5mm", False, "CRUZETA", 0.5, 2.5, "1-2 maos-francesas por cruzeta"
-
-    ' === GANCHO OLHAL (ancora suspensao) ===
-    AddMatRC d, "134250015", "GANCHO OLHAL", "F-13", "Gancho olhal 5000daN", True, "", 0, 0, ""
-
-    ' === MANILHA / OLHAL: 1:1 com gancho ===
-    AddMatRC d, "134200006", "MANILHA",        "F-22", "Manilha sapatilha 5000daN",  False, "GANCHO OLHAL", 0.8, 1.2, "1 manilha por ponto de suspensao"
-    AddMatRC d, "134250023", "OLHAL PARAFUSO", "-",    "Olhal parafuso M16 5000daN", False, "GANCHO OLHAL", 0.8, 1.2, "1 olhal por ponto de suspensao"
-    AddMatRC d, "134740023", "PARAFUSO OLHAL", "F-34", "Parafuso olhal M16x250mm",   False, "GANCHO OLHAL", 0.8, 1.2, "1 parafuso olhal por ponto de suspensao"
-
-    ' === HASTE DE ATERRAMENTO (ancora AT) ===
-    AddMatRC d, "134600010", "HASTE TERRA", "F-17", "Haste aco-cobreado 14,3mm 2,4m", True, "", 0, 0, ""
-    AddMatRC d, "134600004", "HASTE TERRA", "F-17", "Haste aco-cobreado 12,7mm 2,4m", True, "", 0, 0, ""
-
-    ' === CONECTOR HASTE: 1:1 com haste ===
-    AddMatRC d, "124140026", "CONEC HASTE", "M-10", "Conector cunha haste 6-16mm",  False, "HASTE TERRA", 0.8, 1.2, "1 conector por haste de aterramento"
-    AddMatRC d, "124140078", "CONEC HASTE", "M-10", "Conector aterramento p/haste", False, "HASTE TERRA", 0.8, 1.2, "1 conector por haste de aterramento"
-    AddMatRC d, "124140011", "CONEC HASTE", "M-10", "Conector cunha haste",         False, "HASTE TERRA", 0.8, 1.2, "1 conector por haste de aterramento"
-
-    ' === SUPORTE PARA-RAIOS (ancora PR) ===
-    AddMatRC d, "134190064", "SUP PARA-RAIO", "F-47", "Suporte L para-raios 38x205", True, "", 0, 0, ""
-
-    ' === PARA-RAIOS: 1:1 com suporte ===
-    AddMatRC d, "104010001", "PARA-RAIO", "E-29", "Para-raios ZnO 12kV 10kA", False, "SUP PARA-RAIO", 0.8, 1.2, "1 para-raios por suporte (1:1)"
-    AddMatRC d, "104010004", "PARA-RAIO", "E-29", "Para-raios ZnO 15kV",      False, "SUP PARA-RAIO", 0.8, 1.2, "1 para-raios por suporte (1:1)"
-
-    ' === CHAVE FUSIVEL (ancora) ===
-    AddMatRC d, "105300003", "CHAVE FUSIVEL", "E-09", "Chave fusivel 15kV 100A base C", True, "", 0, 0, ""
-
-    ' === TRANSFORMADOR (ancora) ===
-    AddMatRC d, "102100035", "TRAFO", "E-45", "Trafo trifasico 13,8kV 500kVA", True, "", 0, 0, ""
-    AddMatRC d, "102100036", "TRAFO", "E-45", "Trafo trifasico 13,8kV",        True, "", 0, 0, ""
-    AddMatRC d, "102100030", "TRAFO", "E-45", "Trafo monofasico",               True, "", 0, 0, ""
-
-    ' === CONECTOR RAMAL (ancora informativo) ===
-    AddMatRC d, "124010010", "CONEC RAMAL", "O-02", "Conector cunha CuEst tipo II",  True, "", 0, 0, ""
-    AddMatRC d, "124010012", "CONEC RAMAL", "O-02", "Conector cunha CuEst tipo III", True, "", 0, 0, ""
-
-    Set CriarMapaNT006_RC = d
-End Function
-
-Private Sub AddMatRC(d As Object, ByVal cod As String, ByVal familia As String, _
-                     ByVal nt006 As String, ByVal descr As String, ByVal ehAnc As Boolean, _
-                     ByVal ancDep As String, ByVal rMin As Double, ByVal rMax As Double, _
-                     ByVal regra As String)
-    If d.Exists(cod) Then Exit Sub   ' primeiro registro vence
-    Dim m As Object: Set m = CreateObject("Scripting.Dictionary")
-    m("Familia")    = familia
-    m("CodNT006")   = nt006
-    m("DescrNT006") = descr
-    m("EhAncora")   = ehAnc
-    m("AncoraDep")  = ancDep
-    m("RazaoMin")   = rMin
-    m("RazaoMax")   = rMax
-    m("DescrRegra") = regra
-    d.Add cod, m
-End Sub
-
 
 '==============================================================================
 '  FUNCOES ADICIONADAS NAS FASES 1, 3 e 4 (refatoracao)
@@ -7166,27 +7491,6 @@ Private Sub PintarRunVeredito(ws As Worksheet, ByVal jc As Long, _
     End With
 End Sub
 
-Private Sub PintarStatusRC(ws As Worksheet, ByVal linIni As Long, _
-                           ByVal linFim As Long, ByVal st As String)
-    Dim bgRC As Long, fgRC As Long
-    Select Case st
-        Case "OK":                  bgRC = COR_UI_OK_BG:   fgRC = COR_UI_OK_FG
-        Case "ANCORA":              bgRC = COR_UI_INFO_BG: fgRC = COR_UI_INFO_FG
-        Case "EXCESSO":             bgRC = COR_UI_WARN_BG: fgRC = COR_UI_WARN_FG
-        Case "INSUFICIENTE":        bgRC = COR_UI_BAD_BG:  fgRC = COR_UI_BAD_FG
-        Case "ESTORNO SEM ENTRADA": bgRC = COR_UI_BAD_BG:  fgRC = COR_UI_BAD_FG
-        Case "QTD ZERO":            bgRC = COR_UI_BAD_BG:  fgRC = COR_UI_BAD_FG
-        Case "SEM ANCORA":          bgRC = COR_UI_WARN_BG: fgRC = COR_UI_NEU_FG
-        Case Else:                  bgRC = COR_UI_NEU_BG:  fgRC = COR_UI_NEU_FG
-    End Select
-    With ws.Range(ws.Cells(linIni, 15), ws.Cells(linFim, 15))
-        .Interior.Color = bgRC
-        .Font.Color = fgRC
-        .Font.Name = FONTE_UI
-        .Font.Bold = True
-    End With
-End Sub
-
 Private Sub GarantirConfig()
     Dim ws As Worksheet
     On Error Resume Next
@@ -7206,7 +7510,7 @@ Private Sub GarantirConfig()
     Dim def As Variant
     def = Array( _
         Array("CAT_MATERIAIS", "%USERPROFILE%\Downloads\MATERIAS_ATUAIS_4.xlsx;%USERPROFILE%\Downloads\MATERIAS_ATUAIS (2).xlsx;%USERPROFILE%\Downloads\MATERIAS_ATUAIS.xlsx", "Caminhos do catalogo de materiais (separar alternativas por ;)"), _
-        Array("CAT_SERVICOS", "%USERPROFILE%\Downloads\SERVICOS_ATUAIS_3.xlsx;%USERPROFILE%\Downloads\SERVICOS_ATUAIS_2.xlsx;%USERPROFILE%\Downloads\SERVICOS_ATUAIS.xlsx", "Caminho do catalogo de servicos"), _
+        Array("CAT_SERVICOS", "%USERPROFILE%\Downloads\SERVICOS_ATUAIS.xlsx;%USERPROFILE%\Downloads\SERVICOS_ATUAIS_3.xlsx;%USERPROFILE%\Downloads\SERVICOS_ATUAIS_2.xlsx", "Caminho do catalogo de servicos"), _
         Array("CAT_CLASSE", "%USERPROFILE%\Downloads\CLASSE_CUSTO_ATUAIS_2.xlsx;%USERPROFILE%\Downloads\CLASSE_CUSTO_ATUAIS.xlsx", "Caminhos do catalogo de classe de custo"), _
         Array("CAT_CABO", "%USERPROFILE%\Downloads\CONVERSOES_CABO_ATUAIS.xlsx", "Caminho da conversao de cabo KG->m (opcional)"), _
         Array("CAT_COMBO", "%USERPROFILE%\Downloads\SRV_COMBO_ATUAIS.xlsx", "Caminho do catalogo SRV COMBO"), _
@@ -7218,7 +7522,8 @@ Private Sub GarantirConfig()
         Array("CLASSE_COMBUSTIVEL", "8119980000", "Classe de custo de combustiveis -> categoria OUTROS na ANALISE DE CA"), _
         Array("EQUIV_SRV_MAT", "", "De-para extra CLS2 servico=familia material (ex.: JUMPER=ALCA;X=Y)"), _
         Array("SRV_PURO", "", "Familias extra de servico sem material esperado (separadas por ;)"), _
-        Array("FAM_UAR", "", "Familias UAR extra (equivalentes a UC; nao geram alerta SEM UC). Separadas por ;"))
+        Array("FAM_UAR", "", "Familias UAR extra (equivalentes a UC; nao geram alerta SEM UC). Separadas por ;"), _
+        Array("MOSTRAR_TEMPOS", "1", "Mostra o ranking de tempo por aba ao final (0 = desliga)"))
 
     ' indexa chaves ja existentes
     Dim ult As Long: ult = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
@@ -7592,7 +7897,7 @@ Private Sub OrganizarAbas()
     ordem = Array("PAINEL EXECUTIVO", "CHECKLIST CKCP", "PORTFOLIO OBRA", _
                   "ALERTAS CRITICOS", "MATERIAL vs SERVICO", "MATERIAL", "SERVICO", _
                   "SERVICO SEM MATERIAL", "ANALISE DE CA", _
-                  "NAO CLASSIFICADOS", "RACIONALIZACAO COM", "RAZAO CJ", "REGRAS")
+                  "NAO CLASSIFICADOS", "RAZAO CJ", "REGRAS")
     pos = 0
     For i = 0 To UBound(ordem)
         Set ws = Nothing

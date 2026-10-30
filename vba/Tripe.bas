@@ -430,7 +430,9 @@ Private Sub AgregarCKCP(a As Variant, mp As Object, ByVal porPep4 As Boolean)
     If IsEmpty(a) Then Exit Sub
     Dim cSt As Long, cP3 As Long, cP4 As Long, cCls As Long, cTipo As Long
     Dim cMat As Long, cSrv As Long, cSit As Long, cObs1 As Long, cObs2 As Long
-    cSt = Col(mp, "STATUS PEP4"): cP3 = Col(mp, "PEP3NIVEL"): cP4 = Col(mp, "PEP4NIVEL")
+    ' CKCP v14 renomeou STATUS_PEP4 -> STATUS_PEP3NIVEL (o veredito ja vem propagado ao PEP3)
+    cSt = Col(mp, "STATUS PEP3NIVEL"): If cSt = 0 Then cSt = Col(mp, "STATUS PEP4")
+    cP3 = Col(mp, "PEP3NIVEL"): cP4 = Col(mp, "PEP4NIVEL")
     cCls = Col(mp, "CLS2"): cTipo = Col(mp, "TIPO")
     cMat = Col(mp, "MAT"): cSrv = Col(mp, "SRV"): cSit = Col(mp, "SITUACAO")
     cObs1 = Col(mp, "OBS1"): cObs2 = Col(mp, "OBS2")

@@ -1,5 +1,22 @@
 # Changelog — TRIPÉ
 
+## v0.1.2 — CKCP v14 (2026-10-30)
+
+- `vba/AnaliseCKCP.bas` atualizado para a versão 14 (AnaliseCKCP_OTIMIZADO de 23/10/2026). Novas regras da
+  aderência MATERIAL vs SERVICO:
+  - grupos de **LIGACAO SERV X MAT** (planilha "LIGACAO DE MATERIAL E SERVICO"): serviço e material do
+    mesmo grupo lançados no mesmo PEP4 ficam aderentes; nova coluna `LIGACAO SERV X MAT`;
+  - **famílias críticas**: NAO ADERENTE em qualquer PEP4 (ODD/ODI/ODM/ODS) reprova o PEP3;
+  - CH FUS dentro do esperado pelos trafos (1F = 1, 3F = 3); serviço 5025300148 paga 3 CH FUS + 3 PARA RAIO MT;
+  - 122060001 (aço cobreado) abaixo de 10 kg e CABO ISOLADO abaixo de 15 não reprovam;
+  - material com "Classificação" vazia no SAP (ex.: sucata em ODD) entra como material pelo catálogo;
+  - ranking de tempo por etapa ao final (desligável com `MOSTRAR_TEMPOS = 0` na aba CONFIG).
+- A coluna de veredito da aba MATERIAL vs SERVICO passou de `STATUS_PEP4` para `STATUS_PEP3NIVEL`;
+  o `Tripe.bas` lê os dois nomes.
+- O CKCP v14 não gera mais a aba `RACIONALIZACAO COM` (e a apaga no início). O TRIPÉ já preservava a aba
+  do inventário com nome temporário, então ela continua intacta.
+- `AnaliseCKCP.bas` agora com quebras de linha CRLF, como os outros módulos (a versão anterior estava só com LF).
+
 ## v0.1.1 (2026-10-20)
 
 - TRIPE DETALHE: nova coluna `DESCRICAO DO MATERIAL` ao lado de `FAMILIA`, com os materiais do

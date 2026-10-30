@@ -1,4 +1,4 @@
-# VÉRTICE — TRIPÉ: Projeto × Baixa SAP × Serviço pago (v0.1.1)
+# VÉRTICE — TRIPÉ: Projeto × Baixa SAP × Serviço pago (v0.1.2)
 
 > *A obra só fica de pé se as três pernas baterem.*
 
@@ -131,8 +131,9 @@ Esses catálogos **não** estão neste repositório.
 ## Limitações conhecidas (MVP)
 
 - As mensagens finais de cada macro de origem ainda aparecem durante a execução; basta clicar OK.
-- As duas macros criam uma aba `RACIONALIZACAO COM`. O TRIPÉ mantém a do inventário e renomeia a do CKCP
-  para `RACIONALIZACAO COM CKCP`; as duas ficam ocultas.
+- A aba `RACIONALIZACAO COM` vem só do inventário (o CKCP v14 não a gera mais e a apaga ao iniciar; o TRIPÉ
+  a protege com um nome temporário durante a execução do CKCP). Ela fica oculta.
+- O CKCP v14 mostra um ranking de tempo por etapa ao final; para desligar, use `MOSTRAR_TEMPOS = 0` na aba CONFIG.
 - Os nomes de família vêm de fontes diferentes: a coluna `FAMILIA` no inventário e o `CLS2` do catálogo
   no CKCP. Divergências de nome se resolvem com `TRIPE_ALIAS_FAMILIA`.
 - Não há testes automatizados do VBA. A validação é feita rodando com uma planilha real.
