@@ -1,5 +1,18 @@
 # Changelog — TRIPÉ
 
+## v0.1.3 — CKCP v15: CHECK CAPITALIZACAO (2026-10-31)
+
+- `vba/AnaliseCKCP.bas` atualizado para a v15 (v14 + `Gerar_CheckCapitalizacao`), com os testes da planilha
+  de capitalização RD de GO (TST GERAL, TST UC-COM, TST MOP, TST MAT, CABO em KILO e motivos da aba Devolver).
+- Nova aba `CHECK CAPITALIZACAO` (1 linha por PEP): MOP/SERVIÇO (11% ± 1), UC/UAR, COM, serviço de instalação,
+  quantidade zerada, valor negativo, abaixo do preço médio, serviço na classe de material, cabo UC em KG < 7 m,
+  lançamentos após a data de corte, `MOTIVOS DEVOLUCAO` e `STATUS CAPITALIZACAO`. Motivos `QUESTIONAR:` não reprovam.
+- Com uma aba `CN43N` no arquivo, também testa CC solicitante/responsável, TI, ODI, perfil de investimento,
+  tranche e data de energização.
+- Nova aba `CAP DETALHE` com os itens apontados. Parâmetros novos `CAP_*` na `CONFIG`.
+- `Tripe.bas`: as duas abas novas entram na ordenação final logo depois de `ALERTAS CRITICOS`.
+- Regras conferidas em Python sobre uma CJI3 real (431 mil linhas). Ainda falta compilar e rodar no Excel.
+
 ## v0.1.2 — CKCP v14 (2026-10-30)
 
 - `vba/AnaliseCKCP.bas` atualizado para a versão 14 (AnaliseCKCP_OTIMIZADO de 23/10/2026). Novas regras da

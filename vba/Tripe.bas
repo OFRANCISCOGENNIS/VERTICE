@@ -995,7 +995,8 @@ End Sub
 ' ficam ocultas (botao direito numa guia > Reexibir).
 Private Sub OrganizarAbasFinal(wb As Workbook)
     Dim ordem As Variant, ocultas As Variant
-    ordem = Array("TRIPE CONCLUSAO", "TRIPE DETALHE", "ALERTAS CRITICOS", "MATERIAL vs SERVICO", _
+    ordem = Array("TRIPE CONCLUSAO", "TRIPE DETALHE", "ALERTAS CRITICOS", "CHECK CAPITALIZACAO", "CAP DETALHE", _
+                  "MATERIAL vs SERVICO", _
                   "MATERIAL", "SERVICO", "SERVICO SEM MATERIAL", "ANALISE DE CA", _
                   "NAO CLASSIFICADOS", "RAZAO", "REGRAS", "ANALISE SAP x PRJ", _
                   "RESUMO SAP x PRJ", "ALERTA CRITICO")

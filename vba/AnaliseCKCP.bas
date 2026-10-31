@@ -238,6 +238,7 @@ Sub GerarRelatorio()
     gEtapa = "Gerar_Servico": ta = Timer: Gerar_Servico: dTempos("SERVICO") = Timer - ta
     gEtapa = "Gerar_AnaliseCA": ta = Timer: Gerar_AnaliseCA: dTempos("ANALISE DE CA") = Timer - ta
     gEtapa = "Gerar_ServicoSemMaterial": ta = Timer: Gerar_ServicoSemMaterial: dTempos("SERVICO SEM MATERIAL") = Timer - ta
+    gEtapa = "Gerar_CheckCapitalizacao": ta = Timer: Gerar_CheckCapitalizacao: dTempos("CHECK CAPITALIZACAO") = Timer - ta
     gEtapa = "Gerar_NaoClassificados": ta = Timer: Gerar_NaoClassificados: dTempos("NAO CLASSIFICADOS") = Timer - ta
     ' RACIONALIZACAO COM removida (arquivo mais leve); a aba antiga e apagada em abasObsoletas.
     gEtapa = "Gerar_Regras": ta = Timer: Gerar_Regras: dTempos("REGRAS") = Timer - ta
@@ -7491,6 +7492,515 @@ Private Sub PintarRunVeredito(ws As Worksheet, ByVal jc As Long, _
     End With
 End Sub
 
+'==============================================================================
+'  ABA: CHECK CAPITALIZACAO  (testes da planilha de capitalizacao RD - GO)
+'  Replica os testes TST GERAL / TST UC-COM / TST MOP / TST MAT / CABO em KILO
+'  e os motivos de DEVOLVER. Uma linha por PEP + aba CAP DETALHE com os itens.
+'  Os testes de cadastro (CC, TI, ODI, perfil, tranche, energizacao) rodam
+'  quando existe no arquivo uma aba CN43N (cabecalho "WBS element"/"PerInv").
+'==============================================================================
+Private Sub Gerar_CheckCapitalizacao()
+    Dim corte As Date, temCorte As Boolean
+    Dim sCorte As String: sCorte = CfgTxt("CAP_DATA_CORTE", "")
+    If sCorte <> "" Then
+        If IsDate(DataCap(sCorte)) Then corte = DataCap(sCorte): temCorte = True
+    End If
+    Dim percMop As Double: percMop = CfgNum("CAP_MOP_SRV_PERC", 11)
+    Dim tolMop As Double: tolMop = CfgNum("CAP_MOP_SRV_TOL", 1)
+    Dim percMedia As Double: percMedia = CfgNum("CAP_PERC_ABAIXO_MEDIA", 10) / 100
+    Dim limM As Double: limM = CfgNum("CAP_CABO_LIMITE_M", 7)
+
+    ' MOP e SERVICO pela classe de custo (BASE DE INFO da capitalizacao)
+    Dim dMopCls As Object, dSrvExtra As Object
+    Set dMopCls = ListaCfgCap("CAP_CLASSES_MOP", "8010260000;8010270000;8010280000;8010290000;8110260000;8110270000;8110280000;8110290000;8210260000;8210270000;8210280000;8210290000;8990260000;8990270000;8990280000;8990290000;8950270000;8950280000;8010420000;8019930000;8119930000;8990020000")
+    Set dSrvExtra = ListaCfgCap("CAP_CLASSES_SRV_EXTRA", "8110150000;8111290000;8990080000")
+
+    Dim cData As Long
+    cData = ColLike(wsRaw, Array("DATA LCTO", "DATA LANCAMENTO", "DATA_LANCAMENTO", "DATA DE LANCAMENTO"))
+
+    Dim dPep As Object: Set dPep = CreateObject("Scripting.Dictionary")   ' pep -> idx
+    Dim aV() As Double: ReDim aV(0 To 7, 1 To 64)  ' 0 TOTAL 1 UC 2 COM 3 SRV 4 MOP 5 MO 6 N_APOS 7 ULT_DATA
+    Dim aN() As Long: ReDim aN(0 To 4, 1 To 64)    ' 0 ZERADA 1 NEGATIVO 2 ABAIXO 3 SRV_CLS_MAT 4 CABO
+    Dim nP As Long
+
+    Dim dQ As Object, dVm As Object, dFi As Object
+    Set dQ = CreateObject("Scripting.Dictionary")
+    Set dVm = CreateObject("Scripting.Dictionary")
+    Set dFi = CreateObject("Scripting.Dictionary")
+    Dim dSq As Object, dSv As Object, dSf As Object   ' servico em classe de material
+    Set dSq = CreateObject("Scripting.Dictionary")
+    Set dSv = CreateObject("Scripting.Dictionary")
+    Set dSf = CreateObject("Scripting.Dictionary")
+
+    Dim i As Long, p As Long, pep As String, cod As String, cl As String
+    Dim v As Double, q As Double, cat As String, cc As String, k As String
+    Dim dt As Variant
+    For i = 1 To UBound(dados, 1)
+        pep = Trim$(CStr(dados(i, cPEP))): If pep = "" Then GoTo ProxLin
+        If Not dPep.Exists(pep) Then
+            nP = nP + 1
+            If nP > UBound(aV, 2) Then
+                ReDim Preserve aV(0 To 7, 1 To UBound(aV, 2) * 2)
+                ReDim Preserve aN(0 To 4, 1 To UBound(aN, 2) * 2)
+            End If
+            dPep(pep) = nP
+        End If
+        p = dPep(pep)
+        v = ToNum(dados(i, cValor)): q = ToNum(dados(i, cQtd))
+        cl = UCase$(Trim$(CStr(dados(i, cClassif))))
+        cod = NormCod(dados(i, cMaterial))
+        cc = NormCod(ValorCampo(i, cClasse))
+        aV(0, p) = aV(0, p) + v
+
+        If EhMaterial(cl) Then
+            If cl = "UC" Or cl = "UAR" Then aV(1, p) = aV(1, p) + v
+            If cl = "COM" Then aV(2, p) = aV(2, p) + v
+            ' linhas sem codigo de material (ICMS, frete...) nao entram nos testes de item
+            If cod <> "" Then
+                k = pep & "|" & cod & "|" & cl
+                If Not dFi.Exists(k) Then dFi(k) = i
+                dQ(k) = dQ(k) + q: dVm(k) = dVm(k) + v
+            End If
+        Else
+            If dMopCls.Exists(cc) Then
+                aV(4, p) = aV(4, p) + v
+            ElseIf Left$(cc, 2) = "82" Or dSrvExtra.Exists(cc) Then
+                aV(3, p) = aV(3, p) + v
+            End If
+            cat = CategoriaAnaliseCA(i)
+            If cat = "MAO DE OBRA" Or cat = "MAO DE OBRA CIVIL" Then aV(5, p) = aV(5, p) + v
+        End If
+
+        ' Servico lancado em classe de custo de material (811...)
+        If Left$(cc, 3) = "811" And cod <> "" Then
+            If cl = "CA" Or EhCodServicoCap(cod) Or (Len(cod) = 10 And Left$(cod, 1) = "5") Then
+                k = pep & "|" & cod & "|" & cc
+                If Not dSf.Exists(k) Then dSf(k) = i
+                dSq(k) = dSq(k) + q: dSv(k) = dSv(k) + v
+            End If
+        End If
+
+        ' Lancamento apos a data de corte
+        If temCorte And cData > 0 Then
+            dt = DataCap(ValorCampo(i, cData))
+            If IsDate(dt) Then
+                If CDate(dt) > corte Then
+                    aV(6, p) = aV(6, p) + 1
+                    If CDbl(CDate(dt)) > aV(7, p) Then aV(7, p) = CDbl(CDate(dt))
+                End If
+            End If
+        End If
+ProxLin:
+    Next i
+    If nP = 0 Then Exit Sub
+
+    ' Preco medio por material (ODI/ODM): soma |VALOR| / soma |QTD|
+    Dim dPmV As Object, dPmQ As Object
+    Set dPmV = CreateObject("Scripting.Dictionary")
+    Set dPmQ = CreateObject("Scripting.Dictionary")
+    Dim ks As Variant: ks = dFi.Keys
+    Dim r As Long, pp() As String
+    For r = 0 To dFi.Count - 1
+        pp = Split(CStr(ks(r)), "|")
+        Select Case TipoPEPCodigo(pp(0))
+            Case "I", "M"
+                If Round(dQ(ks(r)), 2) <> 0 Then
+                    dPmV(pp(1)) = dPmV(pp(1)) + Abs(dVm(ks(r)))
+                    dPmQ(pp(1)) = dPmQ(pp(1)) + Abs(dQ(ks(r)))
+                End If
+        End Select
+    Next r
+
+    ' --- Detalhe dos itens -----------------------------------------------------
+    Dim det() As Variant: ReDim det(1 To 12, 0 To 0)
+    Dim nD As Long
+    Dim fi As Long, pm As Double, pu As Double, lim As Double, um As String, mot As String
+    For r = 0 To dFi.Count - 1
+        k = ks(r): pp = Split(k, "|"): fi = dFi(k): p = dPep(pp(0))
+        q = Round(dQ(k), 3): v = Round(dVm(k), 2)
+        If q = 0 And v = 0 Then GoTo ProxItem
+        um = UCase$(TextoCampo(fi, cUML))
+        pm = 0: pu = 0: lim = 0
+        If dPmQ.Exists(pp(1)) Then If dPmQ(pp(1)) > 0 Then pm = dPmV(pp(1)) / dPmQ(pp(1))
+        If q <> 0 Then pu = v / q
+
+        If q = 0 And v <> 0 Then
+            aN(0, p) = aN(0, p) + 1
+            AddDetCap det, nD, fi, pp(0), q, v, pu, pm, 0, "QUANTIDADE ZERADA"
+        End If
+        If (v < 0 Or q < 0) And TipoPEPCodigo(pp(0)) <> "D" Then
+            aN(1, p) = aN(1, p) + 1
+            AddDetCap det, nD, fi, pp(0), q, v, pu, pm, 0, "VALOR NEGATIVO"
+        End If
+        If q > 0 And v > 0 And pm > 0 Then
+            If pu < pm * percMedia Or pu <= 0.05 Then
+                aN(2, p) = aN(2, p) + 1
+                AddDetCap det, nD, fi, pp(0), q, v, pu, pm, 0, "ABAIXO DO PRECO MEDIO"
+            End If
+        End If
+        If um = "KG" And q > 0 And pp(2) = "UC" Then
+            lim = CaboLimiteKg(pp(1), limM)
+            If lim > 0 And q < lim Then
+                aN(4, p) = aN(4, p) + 1
+                AddDetCap det, nD, fi, pp(0), q, v, pu, pm, lim, _
+                    "CABO < " & limM & " M - CONVERTER P/ COM"
+            End If
+        End If
+ProxItem:
+    Next r
+
+    ks = dSf.Keys
+    For r = 0 To dSf.Count - 1
+        k = ks(r): pp = Split(k, "|"): fi = dSf(k): p = dPep(pp(0))
+        If Round(dSv(k), 2) = 0 And Round(dSq(k), 3) = 0 Then GoTo ProxSrv
+        aN(3, p) = aN(3, p) + 1
+        q = Round(dSq(k), 3): v = Round(dSv(k), 2)
+        AddDetCap det, nD, fi, pp(0), q, v, IIf(q <> 0, v / IIf(q = 0, 1, q), 0), 0, 0, _
+            "SERVICO NA CLASSE DE MATERIAL"
+ProxSrv:
+    Next r
+
+    ' --- Cadastro do PEP (CN43N), quando existir -------------------------------
+    Dim dMd As Object: Set dMd = CarregarCadastroCap()
+    Dim temMd As Boolean: temMd = (dMd.Count > 0)
+    Dim dSol As Object, dRes As Object, dTI As Object, dODI As Object, dPI As Object
+    Set dSol = ListaCfgCap("CAP_DIG_SOLICITANTE", "08;09;10;11;12;13;14")
+    Set dRes = ListaCfgCap("CAP_DIG_RESPONSAVEL", "00;01;02;03;04;05;06;07;15;16;17;20;30;33;40;42;50;51;52;60;61;62;63;70;80;82;83;90;92;93")
+    Set dTI = ListaCfgCap("CAP_TI_VALIDOS", "40;41;42;43;44;17;92;93;96")
+    Set dODI = ListaCfgCap("CAP_ODI_VALIDOS", "071001;060002;060001;070001;101007;080001;071005;071008;071009;081002")
+    Set dPI = ListaCfgCap("CAP_PI_VALIDOS", "ZCM054;ZCM058;ZCM052")
+
+    ' --- Saida por PEP ---------------------------------------------------------
+    Dim nC As Long: nC = IIf(temMd, 39, 23)
+    Dim outp() As Variant: ReDim outp(0 To nP, 1 To nC)
+    Dim hdr As Variant
+    hdr = Array("PEP4NIVEL", "PEP3", "TIPO_PEP", "VALOR_TOTAL", "VALOR_UC_UAR", "VALOR_COM", _
+                "VALOR_SERVICO", "VALOR_MOP", "% MOP/SERVICO", "STATUS MOP", "STATUS UC/UAR", _
+                "STATUS COM", "VALOR_MAO_DE_OBRA", "STATUS INSTALACAO", "N QTD ZERADA", _
+                "N VALOR NEGATIVO", "N ABAIXO PRECO MEDIO", "N SRV CLASSE MATERIAL", "N CABO KG", _
+                "N LANCAMENTOS APOS CORTE", "ULTIMO LANCAMENTO APOS CORTE")
+    Dim j As Long
+    For j = 0 To UBound(hdr): outp(0, j + 1) = hdr(j): Next j
+    If temMd Then
+        hdr = Array("STATUS_PEP", "CC_SOLICITANTE", "STATUS CC SOLICITANTE", "CC_RESPONSAVEL", _
+                    "STATUS CC RESPONSAVEL", "TIPO_INSTALACAO", "STATUS TI", "ODI_ANEEL", "STATUS ODI", _
+                    "PERFIL_INVESTIMENTO", "STATUS PERFIL", "DIVISAO", "TRANCHE", "STATUS TRANCHE", _
+                    "DATA_ENERGIZACAO", "STATUS ENERGIZACAO")
+        For j = 0 To UBound(hdr): outp(0, 22 + j) = hdr(j): Next j
+    End If
+    outp(0, nC - 1) = "MOTIVOS DEVOLUCAO"
+    outp(0, nC) = "STATUS CAPITALIZACAO"
+
+    Dim pk As Variant: pk = dPep.Keys
+    Dim pct As Double, m As String, bloq As Boolean, md As Variant, tp As String
+    Dim nRep As Long
+    For r = 0 To nP - 1
+        pep = CStr(pk(r)): p = dPep(pep): tp = TipoPEPCodigo(pep)
+        m = "": bloq = False
+        outp(r + 1, 1) = pep: outp(r + 1, 2) = PEP3(pep): outp(r + 1, 3) = TipoPEPANEEL(pep)
+        outp(r + 1, 4) = Round(aV(0, p), 2): outp(r + 1, 5) = Round(aV(1, p), 2)
+        outp(r + 1, 6) = Round(aV(2, p), 2): outp(r + 1, 7) = Round(aV(3, p), 2)
+        outp(r + 1, 8) = Round(aV(4, p), 2)
+
+        ' MOP / SERVICO (esperado ~11%)
+        If Round(aV(3, p), 2) <> 0 Then
+            pct = aV(4, p) / aV(3, p) * 100
+            outp(r + 1, 9) = Round(pct, 2)
+            If Round(aV(4, p), 2) = 0 Then
+                outp(r + 1, 10) = "SEM MOP - VERIFICAR": AddMotCap m, bloq, "SEM MOP"
+            ElseIf pct > percMop + tolMop Then
+                outp(r + 1, 10) = "MOP ACIMA": AddMotCap m, bloq, "MOP ACIMA DE " & percMop & "%"
+            ElseIf pct < percMop - tolMop Then
+                outp(r + 1, 10) = "MOP ABAIXO": AddMotCap m, bloq, "MOP ABAIXO DE " & percMop & "%"
+            Else
+                outp(r + 1, 10) = "OK"
+            End If
+        Else
+            outp(r + 1, 10) = "SEM SERVICO"
+        End If
+
+        ' UC/UAR e COM
+        If tp = "D" Then
+            outp(r + 1, 11) = "N/A (ODD)": outp(r + 1, 12) = "N/A (ODD)"
+        Else
+            If Round(aV(1, p), 2) > 0 Then
+                outp(r + 1, 11) = "OK"
+            Else
+                outp(r + 1, 11) = "SEM UC/UAR - VERIFICAR": AddMotCap m, bloq, "SEM UC"
+            End If
+            If Round(aV(2, p), 2) <> 0 Then
+                outp(r + 1, 12) = "OK"
+            Else
+                outp(r + 1, 12) = "SEM COM - VERIFICAR": AddMotCap m, bloq, "QUESTIONAR: SEM COM"
+            End If
+        End If
+
+        ' Servico de instalacao (mao de obra) para o material aplicado
+        outp(r + 1, 13) = Round(aV(5, p), 2)
+        If tp <> "D" And Round(aV(1, p) + aV(2, p), 2) > 0 And Round(aV(5, p), 2) <= 0 Then
+            outp(r + 1, 14) = "SEM SERVICO DE INSTALACAO - VERIFICAR"
+            AddMotCap m, bloq, "SEM SERVICO DE INSTALACAO"
+        Else
+            outp(r + 1, 14) = "OK"
+        End If
+
+        outp(r + 1, 15) = aN(0, p): If aN(0, p) > 0 Then AddMotCap m, bloq, "QUANTIDADE ZERADA"
+        outp(r + 1, 16) = aN(1, p): If aN(1, p) > 0 Then AddMotCap m, bloq, "VALOR NEGATIVO"
+        outp(r + 1, 17) = aN(2, p): If aN(2, p) > 0 Then AddMotCap m, bloq, "QUESTIONAR: VALOR ABAIXO DO PRECO MEDIO"
+        outp(r + 1, 18) = aN(3, p): If aN(3, p) > 0 Then AddMotCap m, bloq, "SERVICO NA CLASSE DE MATERIAL"
+        outp(r + 1, 19) = aN(4, p): If aN(4, p) > 0 Then AddMotCap m, bloq, "CABO < " & limM & " M (CONVERTER P/ COM)"
+        outp(r + 1, 20) = aV(6, p)
+        If aV(6, p) > 0 Then
+            outp(r + 1, 21) = Format$(CDate(aV(7, p)), "dd/mm/yyyy")
+            AddMotCap m, bloq, "LOTE ENVIADO APOS O CORTE"
+        End If
+
+        If temMd Then
+            If dMd.Exists(pep) Then
+                md = dMd(pep)
+                AvaliarCadastroCap outp, r + 1, pep, md, dSol, dRes, dTI, dODI, dPI, m, bloq
+            Else
+                outp(r + 1, 22) = "NAO ENCONTRADO NA CN43N - VERIFICAR"
+                AddMotCap m, bloq, "PEP FORA DA CN43N"
+            End If
+        End If
+
+        outp(r + 1, nC - 1) = m
+        If bloq Then
+            outp(r + 1, nC) = "REPROVADO - DEVOLVER": nRep = nRep + 1
+        Else
+            outp(r + 1, nC) = "APROVADO"
+        End If
+    Next r
+    EscreverAba "CHECK CAPITALIZACAO", outp
+
+    ' Resumo no topo (linha de totais nao interfere na tabela: vai em comentario)
+    On Error Resume Next
+    ActiveWorkbook.Worksheets("CHECK CAPITALIZACAO").Cells(1, nC).AddComment _
+        "PEPs: " & nP & vbLf & "Reprovados: " & nRep & vbLf & "Aprovados: " & (nP - nRep) & vbLf & _
+        IIf(temMd, "Cadastro: CN43N encontrada", "Cadastro: sem aba CN43N (testes de cadastro nao rodaram)") & vbLf & _
+        IIf(temCorte, "Data de corte: " & Format$(corte, "dd/mm/yyyy"), "Data de corte: nao informada (CONFIG > CAP_DATA_CORTE)")
+    On Error GoTo 0
+
+    ' --- Aba de detalhe --------------------------------------------------------
+    Dim od() As Variant: ReDim od(0 To IIf(nD = 0, 1, nD), 1 To 12)
+    hdr = Array("PEP4NIVEL", "PEP3", "MATERIAL", "TEXTO_MATERIAL", "CLASSE_CUSTO", "CLASSIFICACAO", _
+                "UML", "QTD_ENTRADA", "VALOR_MOEDA", "PRECO_UNITARIO", "PRECO_MEDIO / LIMITE KG", "ALERTA")
+    For j = 0 To 11: od(0, j + 1) = hdr(j): Next j
+    For r = 1 To nD
+        For j = 1 To 12: od(r, j) = det(j, r): Next j
+    Next r
+    If nD = 0 Then od(1, 1) = "(nenhum item apontado)"
+    EscreverAba "CAP DETALHE", od
+End Sub
+
+Private Sub AddDetCap(det() As Variant, ByRef nD As Long, ByVal fi As Long, ByVal pep As String, _
+                      ByVal q As Double, ByVal v As Double, ByVal pu As Double, ByVal pm As Double, _
+                      ByVal lim As Double, ByVal alerta As String)
+    nD = nD + 1
+    If nD > UBound(det, 2) Then ReDim Preserve det(1 To 12, 0 To nD * 2)
+    det(1, nD) = pep: det(2, nD) = PEP3(pep)
+    det(3, nD) = NormCod(dados(fi, cMaterial)): det(4, nD) = ValorCampo(fi, cTexto)
+    det(5, nD) = ValorCampo(fi, cClasse): det(6, nD) = ValorCampo(fi, cClassif)
+    det(7, nD) = ValorCampo(fi, cUML)
+    det(8, nD) = q: det(9, nD) = v
+    If pu <> 0 Then det(10, nD) = Round(pu, 4)
+    If lim > 0 Then
+        det(11, nD) = Round(lim, 3)
+    ElseIf pm > 0 Then
+        det(11, nD) = Round(pm, 4)
+    End If
+    det(12, nD) = alerta
+End Sub
+
+' Acumula motivo de devolucao; motivos "QUESTIONAR:" nao reprovam o PEP.
+Private Sub AddMotCap(ByRef m As String, ByRef bloq As Boolean, ByVal motivo As String)
+    If InStr(1, " | " & m & " | ", " | " & motivo & " | ", vbTextCompare) > 0 Then Exit Sub
+    If m <> "" Then m = m & " | "
+    m = m & motivo
+    If Left$(UCase$(motivo), 10) <> "QUESTIONAR" Then bloq = True
+End Sub
+
+' Limite em KG para o comprimento minimo do cabo (planilha CABO em KILO).
+' Usa o peso linear fixo; sem peso, usa o fator KG->m do catalogo de cabo.
+Private Function CaboLimiteKg(ByVal cod As String, ByVal limM As Double) As Double
+    Dim kgm As Double
+    Select Case cod
+        Case "122020001": kgm = 0.173     ' POPPY 1/0AWG
+        Case "122020002": kgm = 0.109     ' IRIS 2AWG
+        Case "122020004": kgm = 0.47      ' TULIP 336,4MCM
+        Case "122020005": kgm = 0.0582    ' ROSE 4AWG
+        Case "122020008": kgm = 0.218     ' RAVEN 1/0AWG
+        Case "122020011": kgm = 0.605     ' LINNET 336,4MCM
+        Case "122020012": kgm = 0.097     ' SWAN 4AWG
+        Case "122020013": kgm = 0.405     ' PENGUIN 4/0AWG
+        Case "122020025": kgm = 0.275     ' QUAIL 2/0AWG
+        Case "122030004": kgm = 0.143     ' CU 16MM2
+        Case "122030005": kgm = 0.223     ' CU 25MM2
+        Case "122030006": kgm = 0.312     ' CU 35MM2
+        Case "122030007": kgm = 0.445     ' CU 50MM2
+        Case "122030009": kgm = 0.624     ' CU 70MM2
+        Case "122030010": kgm = 0.845     ' CU 95MM2
+        Case Else
+            Dim fat As Double: fat = CaboFator(cod)
+            If fat > 0 Then kgm = 1 / fat
+    End Select
+    CaboLimiteKg = kgm * limM
+End Function
+
+' Converte data do SAP (Date, serial ou "dd.mm.aaaa") em Date; "" se invalida.
+Private Function DataCap(ByVal v As Variant) As Variant
+    DataCap = ""
+    If IsDate(v) And VarType(v) = vbDate Then DataCap = CDate(v): Exit Function
+    If IsNumeric(v) Then
+        If CDbl(v) > 20000 And CDbl(v) < 80000 Then DataCap = CDate(CDbl(v))
+        Exit Function
+    End If
+    Dim s As String: s = Replace(Replace(Trim$(CStr(v)), ".", "/"), "-", "/")
+    If s Like "##/##/####" Then
+        DataCap = DateSerial(CInt(Right$(s, 4)), CInt(Mid$(s, 4, 2)), CInt(Left$(s, 2)))
+    ElseIf IsDate(s) Then
+        DataCap = CDate(s)
+    End If
+End Function
+
+Private Function ListaCfgCap(ByVal chave As String, ByVal padrao As String) As Object
+    Dim d As Object: Set d = CreateObject("Scripting.Dictionary")
+    Dim parts() As String, i As Long, s As String
+    parts = Split(CfgTxt(chave, padrao), ";")
+    For i = LBound(parts) To UBound(parts)
+        s = UCase$(Trim$(parts(i)))
+        If s <> "" Then d(s) = 1
+    Next i
+    Set ListaCfgCap = d
+End Function
+
+' Le a aba CN43N (dados mestres do PEP). Retorna PEP -> Array(status, ccSol,
+' ccResp, TI, ODI, perfil, divisao, tranche, energizacao). Vazio se nao houver.
+Private Function CarregarCadastroCap() As Object
+    Dim d As Object: Set d = CreateObject("Scripting.Dictionary")
+    Set CarregarCadastroCap = d
+    Dim ws As Worksheet, alvo As Worksheet
+    For Each ws In ActiveWorkbook.Worksheets
+        If Not ws Is wsRaw Then
+            If ColLike(ws, Array("PERINV", "PERFIL DE INVESTIMENTO", "PERFIL INVEST")) > 0 And _
+               ColLike(ws, Array("WBS ELEMENT", "ELEMENTO PEP")) > 0 And _
+               ColLike(ws, Array("VALOR/MOEDA", "VALOR_MOEDA")) = 0 Then
+                Set alvo = ws: Exit For
+            End If
+        End If
+    Next ws
+    If alvo Is Nothing Then Exit Function
+
+    Dim cP As Long, cSt As Long, cSol As Long, cRes As Long, cTI As Long, cOdi As Long
+    Dim cPI As Long, cDiv As Long, cTr As Long, cEn As Long
+    cP = ColLike(alvo, Array("WBS ELEMENT", "ELEMENTO PEP"))
+    cSt = ColLike(alvo, Array("STATUS"))
+    cSol = ColLike(alvo, Array("CENTCUREQ.", "CENTCUREQ", "CC SOLICITANTE", "CENTRO CUSTO SOLIC"))
+    cRes = ColLike(alvo, Array("CENTCURESP", "CC RESPONSAVEL", "CENTRO CUSTO RESP"))
+    cTI = ColLike(alvo, Array("TP. INST.", "TP.INST", "TIPO DE INSTALACAO", "TP. INST"))
+    cOdi = ColLike(alvo, Array("ODI ANEEL", "ODI"))
+    cPI = ColLike(alvo, Array("PERINV", "PERFIL DE INVESTIMENTO", "PERFIL INVEST"))
+    cDiv = ColLike(alvo, Array("DIVISAO"))
+    cTr = ColLike(alvo, Array("NR.", "TRANCHE", "NR TRANCHE"))
+    cEn = ColLike(alvo, Array("DATA DE ENERGIZACAO", "ENERGIZA"))
+
+    Dim ult As Long: ult = alvo.Cells(alvo.Rows.Count, cP).End(xlUp).Row
+    If ult < 2 Then Exit Function
+    Dim uc As Long: uc = alvo.Cells(1, alvo.Columns.Count).End(xlToLeft).Column
+    Dim m As Variant: m = alvo.Range(alvo.Cells(2, 1), alvo.Cells(ult, uc)).Value
+    Dim i As Long, pep As String
+    For i = 1 To UBound(m, 1)
+        pep = Trim$(CStr(m(i, cP)))
+        If pep <> "" And Not d.Exists(pep) Then
+            d(pep) = Array(TextoMatriz(m, i, cSt), TextoMatriz(m, i, cSol), TextoMatriz(m, i, cRes), _
+                           TextoMatriz(m, i, cTI), TextoMatriz(m, i, cOdi), TextoMatriz(m, i, cPI), _
+                           TextoMatriz(m, i, cDiv), TextoMatriz(m, i, cTr), ValorMatriz(m, i, cEn))
+        End If
+    Next i
+End Function
+
+' Testes do TST GERAL sobre o cadastro (colunas 22..37 da CHECK CAPITALIZACAO).
+Private Sub AvaliarCadastroCap(outp() As Variant, ByVal r As Long, ByVal pep As String, md As Variant, _
+                               dSol As Object, dRes As Object, dTI As Object, dODI As Object, dPI As Object, _
+                               ByRef m As String, ByRef bloq As Boolean)
+    Dim st As String: st = UCase$(md(0))
+    If Len(st) >= 4 Then outp(r, 22) = Left$(st, 4) & " // " & Right$(st, 4) Else outp(r, 22) = st
+
+    outp(r, 23) = md(1)
+    If md(1) <> "" Then
+        If dSol.Exists(Mid$(md(1), 5, 2)) Then
+            outp(r, 24) = "OK"
+        Else
+            outp(r, 24) = "INCORRETO - VERIFICAR": AddMotCap m, bloq, "CENTRO DE CUSTO SOLICITANTE INCORRETO"
+        End If
+    End If
+    outp(r, 25) = md(2)
+    If md(2) <> "" Then
+        If dRes.Exists(Mid$(md(2), 5, 2)) Then
+            outp(r, 26) = "OK"
+        Else
+            outp(r, 26) = "INCORRETO - VERIFICAR": AddMotCap m, bloq, "CENTRO DE CUSTO RESPONSAVEL INCORRETO"
+        End If
+    End If
+    outp(r, 27) = md(3)
+    If dTI.Exists(UCase$(md(3))) Then
+        outp(r, 28) = "OK"
+    Else
+        outp(r, 28) = "INCORRETO - VERIFICAR": AddMotCap m, bloq, "TIPO DE INSTALACAO INCORRETO"
+    End If
+    Dim odi As String: odi = md(4)
+    If IsNumeric(odi) And Len(odi) < 6 Then odi = Format$(Val(odi), "000000")
+    outp(r, 29) = odi
+    If dODI.Exists(UCase$(odi)) Then
+        outp(r, 30) = "OK"
+    Else
+        outp(r, 30) = "INCORRETO - VERIFICAR": AddMotCap m, bloq, "ODI ANEEL INCORRETA"
+    End If
+
+    ' Perfil: .I -> ZCM054/ZCM052 ; .M -> ZCM058/ZCM052
+    Dim sPI As String: sPI = UCase$(md(5))
+    outp(r, 31) = md(5)
+    Select Case TipoPEPCodigo(pep)
+        Case "I"
+            outp(r, 32) = IIf((sPI = "ZCM054" Or sPI = "ZCM052") And dPI.Exists(sPI), "OK", "INCORRETO - VERIFICAR")
+        Case "M"
+            outp(r, 32) = IIf((sPI = "ZCM058" Or sPI = "ZCM052") And dPI.Exists(sPI), "OK", "INCORRETO - VERIFICAR")
+        Case Else
+            outp(r, 32) = "N/A"
+    End Select
+    If outp(r, 32) <> "OK" And outp(r, 32) <> "N/A" Then AddMotCap m, bloq, "PERFIL DE INVESTIMENTO INCORRETO"
+
+    ' Tranche: divisao P... exige Nr. com 3 digitos; divisao C... nao se aplica
+    Dim tr As String: tr = md(7)
+    If IsNumeric(tr) And Len(tr) < 3 Then tr = Format$(Val(tr), "000")   ' "006" lido como 6
+    outp(r, 33) = md(6): outp(r, 34) = tr
+    If UCase$(Left$(md(6), 1)) = "P" Then
+        If tr = "" Then
+            outp(r, 35) = "SEM TRANCHE - VERIFICAR": AddMotCap m, bloq, "SEM N. TRANCHE"
+        ElseIf Len(tr) = 3 Then
+            outp(r, 35) = "OK"
+        Else
+            outp(r, 35) = "INCORRETO - VERIFICAR": AddMotCap m, bloq, "N. TRANCHE INCORRETO"
+        End If
+    Else
+        outp(r, 35) = "N/A"
+    End If
+
+    Dim de As Variant: de = DataCap(md(8))
+    If IsDate(de) Then
+        outp(r, 36) = Format$(CDate(de), "dd/mm/yyyy"): outp(r, 37) = "OK"
+    Else
+        outp(r, 37) = "SEM DATA - VERIFICAR": AddMotCap m, bloq, "SEM DATA DE ENERGIZACAO"
+    End If
+End Sub
+
+Private Function EhCodServicoCap(ByVal cod As String) As Boolean
+    If dCatSrv Is Nothing Then Exit Function
+    EhCodServicoCap = dCatSrv.Exists(cod)
+End Function
+
+
 Private Sub GarantirConfig()
     Dim ws As Worksheet
     On Error Resume Next
@@ -7524,6 +8034,20 @@ Private Sub GarantirConfig()
         Array("SRV_PURO", "", "Familias extra de servico sem material esperado (separadas por ;)"), _
         Array("FAM_UAR", "", "Familias UAR extra (equivalentes a UC; nao geram alerta SEM UC). Separadas por ;"), _
         Array("MOSTRAR_TEMPOS", "1", "Mostra o ranking de tempo por aba ao final (0 = desliga)"))
+    ' chaves do CHECK CAPITALIZACAO (bloco separado: limite de 24 continuacoes por instrucao)
+    def = JuntarArrCfg(def, Array( _
+        Array("CAP_DATA_CORTE", "", "CHECK CAPITALIZACAO: data de corte do lote (dd/mm/aaaa). Lancamentos depois dela = LOTE ENVIADO APOS O CORTE"), _
+        Array("CAP_MOP_SRV_PERC", "11", "CHECK CAPITALIZACAO: MOP esperado sobre SERVICO (%)"), _
+        Array("CAP_MOP_SRV_TOL", "1", "CHECK CAPITALIZACAO: tolerancia do MOP/SERVICO (pontos %)"), _
+        Array("CAP_PERC_ABAIXO_MEDIA", "10", "CHECK CAPITALIZACAO: preco unitario abaixo deste % do preco medio = ABAIXO DO PRECO MEDIO (questionar)"), _
+        Array("CAP_CABO_LIMITE_M", "7", "CHECK CAPITALIZACAO: cabo UC em KG abaixo deste comprimento (m) vira COM"), _
+        Array("CAP_DIG_SOLICITANTE", "08;09;10;11;12;13;14", "CHECK CAPITALIZACAO: digitos 5-6 validos do CC solicitante"), _
+        Array("CAP_DIG_RESPONSAVEL", "00;01;02;03;04;05;06;07;15;16;17;20;30;33;40;42;50;51;52;60;61;62;63;70;80;82;83;90;92;93", "CHECK CAPITALIZACAO: digitos 5-6 validos do CC responsavel"), _
+        Array("CAP_TI_VALIDOS", "40;41;42;43;44;17;92;93;96", "CHECK CAPITALIZACAO: tipos de instalacao validos"), _
+        Array("CAP_ODI_VALIDOS", "071001;060002;060001;070001;101007;080001;071005;071008;071009;081002", "CHECK CAPITALIZACAO: ODI ANEEL validas"), _
+        Array("CAP_PI_VALIDOS", "ZCM054;ZCM058;ZCM052", "CHECK CAPITALIZACAO: perfis de investimento validos"), _
+        Array("CAP_CLASSES_MOP", "", "CHECK CAPITALIZACAO: classes de custo de MOP (vazio = lista da BASE DE INFO)"), _
+        Array("CAP_CLASSES_SRV_EXTRA", "", "CHECK CAPITALIZACAO: classes fora do grupo 82 que contam como SERVICO (vazio = padrao)")))
 
     ' indexa chaves ja existentes
     Dim ult As Long: ult = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
@@ -7548,6 +8072,14 @@ Private Sub GarantirConfig()
     ws.Columns("A:C").AutoFit
     ws.Visible = xlSheetHidden   ' oculta (reexibir: botao direito na guia > Reexibir)
 End Sub
+
+Private Function JuntarArrCfg(a As Variant, b As Variant) As Variant
+    Dim r() As Variant, i As Long, n As Long
+    ReDim r(0 To UBound(a) + UBound(b) + 1)
+    For i = 0 To UBound(a): r(n) = a(i): n = n + 1: Next i
+    For i = 0 To UBound(b): r(n) = b(i): n = n + 1: Next i
+    JuntarArrCfg = r
+End Function
 
 Private Sub CarregarConfig()
     Set dCfg = CreateObject("Scripting.Dictionary")
@@ -7628,7 +8160,7 @@ Private Function CorAba(ByVal nome As String) As Long
     Select Case UCase$(Trim$(nome))
         Case "PAINEL EXECUTIVO", "PORTFOLIO OBRA"
             CorAba = RGB(46, 125, 50)      ' verde  - visao gerencial
-        Case "ALERTAS CRITICOS", "NAO CLASSIFICADOS"
+        Case "ALERTAS CRITICOS", "NAO CLASSIFICADOS", "CHECK CAPITALIZACAO", "CAP DETALHE"
             CorAba = RGB(198, 40, 40)      ' vermelho - exige acao
         Case "MATERIAL VS SERVICO", "MATERIAL", "SERVICO", "SERVICO SEM MATERIAL"
             CorAba = RGB(21, 101, 192)     ' azul - aderencia MAT/SRV
@@ -7895,7 +8427,8 @@ End Sub
 Private Sub OrganizarAbas()
     Dim ordem As Variant, i As Long, ws As Worksheet, pos As Long
     ordem = Array("PAINEL EXECUTIVO", "CHECKLIST CKCP", "PORTFOLIO OBRA", _
-                  "ALERTAS CRITICOS", "MATERIAL vs SERVICO", "MATERIAL", "SERVICO", _
+                  "ALERTAS CRITICOS", "CHECK CAPITALIZACAO", "CAP DETALHE", _
+                  "MATERIAL vs SERVICO", "MATERIAL", "SERVICO", _
                   "SERVICO SEM MATERIAL", "ANALISE DE CA", _
                   "NAO CLASSIFICADOS", "RAZAO CJ", "REGRAS")
     pos = 0
