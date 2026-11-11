@@ -12,7 +12,37 @@ Attribute VB_Name = "AnaliseCKCP"
 '   "Elemento PEP", "Classe de custo", "Material", "Qtd.total entrada",
 '   "Valor/moeda objeto", "Classificao", "Descrio SA", etc.
 '==============================================================================
+'------------------------------------------------------------------------------
+'  VERSAO: v16 (2026-11-11)  -  projeto VERTICE
+'  Mudancas da v16 sobre a v15 (nenhuma regra de negocio / veredito alterado):
+'   1. Barra de status com a etapa em andamento + log na janela Imediata
+'      (Ctrl+G no editor); a barra e devolvida ao Excel no fim e em erro.
+'   2. Mensagens de erro mais claras: colunas obrigatorias que faltam, aba
+'      lida, versao da macro e etapa do erro.
+'   3. Avisos ao final (MostrarAvisos): catalogo nao selecionado ou ilegivel,
+'      aba CN43N ausente, CAP_DATA_CORTE invalida, coluna de data ausente.
+'      Antes essas situacoes passavam em silencio.
+'   4. Catalogo ja aberto no Excel e reaproveitado e NAO e mais fechado pela
+'      macro (antes podia fechar o arquivo do usuario sem salvar).
+'   5. Pasta de trabalho da analise e reativada apos a carga dos catalogos.
+'   6. ColLike / ColExata leem a linha de cabecalho em 1 operacao (array),
+'      em vez de celula a celula a cada fragmento procurado.
+'   7. CHECK CAPITALIZACAO localiza a coluna de data pelos cabecalhos em
+'      memoria (nao depende mais da aba da base apos a geracao da RAZAO CJ).
+'   8. CfgNum com cache por execucao (chamado dentro de lacos).
+'   9. Cronometro tolera a virada da meia-noite; tempo total nao inclui mais
+'      a espera das caixas de mensagem; caches e base liberados no fim.
+'------------------------------------------------------------------------------
 Option Explicit
+
+' Versao do modulo (barra de status, mensagens e log)
+Private Const MACRO_VERSAO As String = "v16 2026-11-11"
+' v16: avisos acumulados na execucao, exibidos por MostrarAvisos
+Private gAvisos As String
+' v16: True quando o catalogo ja estava aberto no Excel (nao fechar)
+Private gCatReusado As Boolean
+' v16: cache de CfgNum (CHAVE|padrao -> valor), refeito a cada CarregarConfig
+Private dCfgNum As Object
 
 ' Rastreio de etapa para diagnostico de erros (exibido no handler Falha)
 Private gEtapa As String
@@ -148,7 +178,13 @@ Private dDescSrv As Object     ' COD_SERVICO -> descricao (Denominacao)
 Sub GerarRelatorio()
     Dim t As Double: t = Timer
     Dim ta As Double                      ' cronometro por aba
+    Dim wbAlvo As Workbook                ' v16: pasta de trabalho da analise
+    Dim tTotal As Double                  ' v16: tempo total (sem a espera das MsgBox)
     Set dTempos = CreateObject("Scripting.Dictionary")
+    gAvisos = ""                          ' v16: avisos da execucao (MostrarAvisos)
+    Set dNormCache = Nothing              ' v16: caches de normalizacao nao crescem
+    Set dSemAcCache = Nothing             '      de uma execucao para a outra
+    Set wbAlvo = ActiveWorkbook
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
     Application.DisplayAlerts = False
@@ -157,8 +193,8 @@ Sub GerarRelatorio()
     On Error GoTo Falha
 
     ' 0a) Garante e carrega a aba CONFIG (parametros centralizados) - FASE 4
-    gEtapa = "GarantirConfig": GarantirConfig
-    gEtapa = "CarregarConfig": CarregarConfig
+    MarcarEtapa "GarantirConfig": GarantirConfig
+    MarcarEtapa "CarregarConfig": CarregarConfig
 
     ' 0) Remove abas obsoletas de execucoes anteriores (se existirem)
     Dim wsLixo As Worksheet
@@ -179,90 +215,120 @@ Sub GerarRelatorio()
     Next ix
 
     ' 1) Localiza a aba com a base crua
+    MarcarEtapa "LocalizarBase"
     Set wsRaw = LocalizarBase()
     If wsRaw Is Nothing Then
         MsgBox "Nao encontrei a base crua. Verifique se ha uma aba com a coluna " & _
-               "'Elemento PEP'.", vbExclamation: GoTo Fim
+               "'Elemento PEP'." & vbLf & vbLf & _
+               "A macro roda sobre a pasta de trabalho ATIVA: deixe a planilha de " & _
+               "upload (aba RAZAO/CJI3) em primeiro plano e rode de novo.", _
+               vbExclamation, "CKCP " & MACRO_VERSAO: GoTo Fim
     End If
 
     ' 2) Mapeia colunas pelos cabecalhos
+    MarcarEtapa "MapearColunas"
     If Not MapearColunas(wsRaw) Then
         MsgBox "Nao encontrei as colunas obrigatorias (Elemento PEP, Classificacao, " & _
-               "Valor/moeda objeto, Qtd.total entrada e Material).", vbExclamation: GoTo Fim
+               "Valor/moeda objeto, Qtd.total entrada e Material)." & vbLf & vbLf & _
+               "Aba lida: " & wsRaw.Name & vbLf & _
+               "Faltando: " & ColunasFaltantes() & vbLf & _
+               "Os cabecalhos precisam estar na linha 1.", _
+               vbExclamation, "CKCP " & MACRO_VERSAO: GoTo Fim
     End If
 
     ' 3) Carrega os dados para memoria (rapido)
+    MarcarEtapa "CarregarDados"
     CarregarDados wsRaw
     If nLin = 0 Then
-        MsgBox "A base foi localizada, mas nao ha linhas de dados para processar.", vbExclamation
+        MsgBox "A base foi localizada (aba " & wsRaw.Name & "), mas nao ha linhas de " & _
+               "dados para processar.", vbExclamation, "CKCP " & MACRO_VERSAO
         GoTo Fim
     End If
 
     ' 3b) Carrega o catalogo de MATERIAIS (FAMILIA, CLS1/2/3)
-    gEtapa = "CarregarCatalogoMateriais": CarregarCatalogoMateriais
-    gEtapa = "PreencherClassifVazia": PreencherClassifVazia
+    MarcarEtapa "CarregarCatalogoMateriais": CarregarCatalogoMateriais
+    MarcarEtapa "PreencherClassifVazia": PreencherClassifVazia
 
     ' 3c) Descricoes embutidas de servico (prioridade) ANTES do catalogo externo,
     '     que preenche as descricoes faltantes a partir de TEXTO BREVE do arquivo.
-    gEtapa = "CarregarDescServico": CarregarDescServico
+    MarcarEtapa "CarregarDescServico": CarregarDescServico
 
     ' 3c') Carrega o catalogo de SERVICOS (CLS1/2/3, TIPO_APLIC, SEGMENTO + descricoes)
-    gEtapa = "CarregarCatalogoServicos": CarregarCatalogoServicos
+    MarcarEtapa "CarregarCatalogoServicos": CarregarCatalogoServicos
 
     ' 3c'') Reclassificacao curada de servicos (sobrepoe o catalogo)
-    gEtapa = "CarregarReclassificacaoServicos": CarregarReclassificacaoServicos
+    MarcarEtapa "CarregarReclassificacaoServicos": CarregarReclassificacaoServicos
 
     ' 3d) Carrega o catalogo de CLASSE DE CUSTO (CLS1/2/3 + TIPO_APLIC; marca RISCO)
-    gEtapa = "CarregarCatalogoClasse": CarregarCatalogoClasse
+    MarcarEtapa "CarregarCatalogoClasse": CarregarCatalogoClasse
 
     ' 3e) Carrega conversao de cabo (KG->m) e SRV COMBO (fator multiplicador)
     '     - usados para refinar a aderencia MATERIAL vs SERVICO (ajuste fino)
-    gEtapa = "CarregarConversoesCabo": CarregarConversoesCabo
-    gEtapa = "CarregarComboServico": CarregarComboServico
+    MarcarEtapa "CarregarConversoesCabo": CarregarConversoesCabo
+    MarcarEtapa "CarregarComboServico": CarregarComboServico
 
     ' 3f) De-para CLASSIFICACAO (familia/CLS2) -> TIPO (COM/UC/UAR)
-    gEtapa = "CarregarTipoClassif": CarregarTipoClassif
+    MarcarEtapa "CarregarTipoClassif": CarregarTipoClassif
 
     ' 3g) Equivalencias servico->material e familias de servico puro
-    gEtapa = "CarregarEquivSrvMat": CarregarEquivSrvMat
-    gEtapa = "CarregarSrvPuro": CarregarSrvPuro
-    gEtapa = "CarregarFamiliaNivel": CarregarFamiliaNivel
-    gEtapa = "CarregarLigacoesSrvMat": CarregarLigacoesSrvMat
-    dTempos("CARGA BASE + CATALOGOS") = Timer - t
+    MarcarEtapa "CarregarEquivSrvMat": CarregarEquivSrvMat
+    MarcarEtapa "CarregarSrvPuro": CarregarSrvPuro
+    MarcarEtapa "CarregarFamiliaNivel": CarregarFamiliaNivel
+    MarcarEtapa "CarregarLigacoesSrvMat": CarregarLigacoesSrvMat
+    dTempos("CARGA BASE + CATALOGOS") = Decorrido(t)
+
+    ' v16: abrir/fechar catalogos pode trocar a pasta ativa; as abas sao criadas
+    ' em ActiveWorkbook, entao garante que a pasta da analise voltou a ser a ativa.
+    If Not wbAlvo Is Nothing Then
+        If Not ActiveWorkbook Is wbAlvo Then wbAlvo.Activate
+    End If
 
     ' 4) Gera cada aba (cada chamada e cronometrada em dTempos)
-    gEtapa = "Gerar_RazaoCJ": ta = Timer: Gerar_RazaoCJ: dTempos("RAZAO CJ") = Timer - ta
-    gEtapa = "Gerar_AlertasCriticos": ta = Timer: Gerar_AlertasCriticos: dTempos("ALERTAS CRITICOS") = Timer - ta
-    gEtapa = "Gerar_MaterialVsServico": ta = Timer: Gerar_MaterialVsServico: dTempos("MATERIAL vs SERVICO") = Timer - ta
-    gEtapa = "Gerar_Material": ta = Timer: Gerar_Material: dTempos("MATERIAL") = Timer - ta
-    gEtapa = "Gerar_Servico": ta = Timer: Gerar_Servico: dTempos("SERVICO") = Timer - ta
-    gEtapa = "Gerar_AnaliseCA": ta = Timer: Gerar_AnaliseCA: dTempos("ANALISE DE CA") = Timer - ta
-    gEtapa = "Gerar_ServicoSemMaterial": ta = Timer: Gerar_ServicoSemMaterial: dTempos("SERVICO SEM MATERIAL") = Timer - ta
-    gEtapa = "Gerar_CheckCapitalizacao": ta = Timer: Gerar_CheckCapitalizacao: dTempos("CHECK CAPITALIZACAO") = Timer - ta
-    gEtapa = "Gerar_NaoClassificados": ta = Timer: Gerar_NaoClassificados: dTempos("NAO CLASSIFICADOS") = Timer - ta
+    MarcarEtapa "Gerar_RazaoCJ": ta = Timer: Gerar_RazaoCJ: dTempos("RAZAO CJ") = Decorrido(ta)
+    MarcarEtapa "Gerar_AlertasCriticos": ta = Timer: Gerar_AlertasCriticos: dTempos("ALERTAS CRITICOS") = Decorrido(ta)
+    MarcarEtapa "Gerar_MaterialVsServico": ta = Timer: Gerar_MaterialVsServico: dTempos("MATERIAL vs SERVICO") = Decorrido(ta)
+    MarcarEtapa "Gerar_Material": ta = Timer: Gerar_Material: dTempos("MATERIAL") = Decorrido(ta)
+    MarcarEtapa "Gerar_Servico": ta = Timer: Gerar_Servico: dTempos("SERVICO") = Decorrido(ta)
+    MarcarEtapa "Gerar_AnaliseCA": ta = Timer: Gerar_AnaliseCA: dTempos("ANALISE DE CA") = Decorrido(ta)
+    MarcarEtapa "Gerar_ServicoSemMaterial": ta = Timer: Gerar_ServicoSemMaterial: dTempos("SERVICO SEM MATERIAL") = Decorrido(ta)
+    MarcarEtapa "Gerar_CheckCapitalizacao": ta = Timer: Gerar_CheckCapitalizacao: dTempos("CHECK CAPITALIZACAO") = Decorrido(ta)
+    MarcarEtapa "Gerar_NaoClassificados": ta = Timer: Gerar_NaoClassificados: dTempos("NAO CLASSIFICADOS") = Decorrido(ta)
     ' RACIONALIZACAO COM removida (arquivo mais leve); a aba antiga e apagada em abasObsoletas.
-    gEtapa = "Gerar_Regras": ta = Timer: Gerar_Regras: dTempos("REGRAS") = Timer - ta
+    MarcarEtapa "Gerar_Regras": ta = Timer: Gerar_Regras: dTempos("REGRAS") = Decorrido(ta)
 
     ' Checklist do processo: criado automaticamente (preserva marcacoes se ja existir)
-    gEtapa = "GerarChecklistCKCP": ta = Timer: GerarChecklistCKCP True: dTempos("CHECKLIST CKCP") = Timer - ta
+    MarcarEtapa "GerarChecklistCKCP": ta = Timer: GerarChecklistCKCP True: dTempos("CHECKLIST CKCP") = Decorrido(ta)
 
     ' FASE 5: ordena as guias por fluxo de leitura e ativa o painel
-    gEtapa = "OrganizarAbas": ta = Timer: OrganizarAbas: dTempos("ORGANIZAR ABAS") = Timer - ta
+    MarcarEtapa "OrganizarAbas": ta = Timer: OrganizarAbas: dTempos("ORGANIZAR ABAS") = Decorrido(ta)
 
     Application.Calculation = xlCalculationAutomatic
     Application.ScreenUpdating = True
-    gEtapa = "MostrarTempos": MostrarTempos (Timer - t)
-    gEtapa = "MostrarTelaFuturista": MostrarTelaFuturista nLin, (Timer - t)
+    Application.StatusBar = False
+    tTotal = Decorrido(t)
+    Debug.Print Format$(Now, "hh:nn:ss") & "  CKCP " & MACRO_VERSAO & "  FIM: " & _
+                nLin & " linhas em " & Format$(tTotal, "0.0") & "s"
+    gEtapa = "MostrarTempos": MostrarTempos tTotal
+    gEtapa = "MostrarAvisos": MostrarAvisos
+    gEtapa = "MostrarTelaFuturista": MostrarTelaFuturista nLin, tTotal
     GoTo Fim
 
 Falha:
+    Debug.Print Format$(Now, "hh:nn:ss") & "  CKCP " & MACRO_VERSAO & "  ERRO " & _
+                Err.Number & " na etapa " & gEtapa & ": " & Err.Description
     MsgBox "Erro " & Err.Number & ": " & Err.Description & vbCrLf & _
-           "Etapa: " & gEtapa, vbCritical
+           "Etapa: " & gEtapa & vbCrLf & _
+           "Versao: CKCP " & MACRO_VERSAO & vbCrLf & vbCrLf & _
+           "As abas geradas antes do erro podem estar incompletas. " & _
+           "Corrija a causa e rode GerarRelatorio de novo.", vbCritical, "CKCP " & MACRO_VERSAO
 Fim:
     Application.ScreenUpdating = True
     Application.Calculation = xlCalculationAutomatic
     Application.DisplayAlerts = True
     Application.EnableEvents = True
+    Application.StatusBar = False          ' v16: devolve a barra de status ao Excel
+    dados = Empty                          ' v16: libera a base crua da memoria
+    rawHeaders = Empty
 End Sub
 
 
@@ -388,7 +454,7 @@ Private Sub MostrarTempos(ByVal totalSeg As Double)
     Next i
     msg = msg & String(44, "-") & vbLf & _
           "TEMPO TOTAL: " & Format$(totalSeg, "0.00") & "s"
-    MsgBox msg, vbInformation, "Tempos de processamento - CKCP"
+    MsgBox msg, vbInformation, "Tempos de processamento - CKCP " & MACRO_VERSAO
 End Sub
 
 Private Sub AddTxt(ws As Worksheet, nm As String, L As Double, T As Double, _
@@ -542,25 +608,48 @@ End Function
 ' Procura a 1 coluna cujo cabealho CONTM qualquer fragmento da lista
 ' (case-insensitive, ignora acentos). Prioriza correspondncia exata.
 Private Function ColLike(ws As Worksheet, frags As Variant) As Long
-    Dim ult As Long, j As Long, i As Long, hdr As String, fr As String
+    ' v16: le a linha 1 de uma vez (array) e delega a ColLikeArr.
+    Dim ult As Long
     ult = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
-    ' 1 passada: igualdade exata (sem acento)
+    ColLike = ColLikeArr(CabecalhoLinha1(ws, ult), ult, frags, False)
+End Function
+
+' v16: linha 1 da aba como matriz (1 To 1, 1 To ult) - 1 leitura no Excel.
+Private Function CabecalhoLinha1(ws As Worksheet, ByVal ult As Long) As Variant
+    Dim v As Variant
+    If ult <= 1 Then
+        ReDim v(1 To 1, 1 To 1)
+        v(1, 1) = ws.Cells(1, 1).Value
+    Else
+        v = ws.Range(ws.Cells(1, 1), ws.Cells(1, ult)).Value
+    End If
+    CabecalhoLinha1 = v
+End Function
+
+' v16: mesma busca de ColLike/ColExata sobre cabecalhos ja em memoria.
+' 1a passada: igualdade exata (sem acento); 2a passada (se soExata = False):
+' cabecalho que CONTEM o fragmento. Retorna 0 se nao achar.
+Private Function ColLikeArr(hdrs As Variant, ByVal ult As Long, frags As Variant, _
+                            ByVal soExata As Boolean) As Long
+    Dim j As Long, i As Long, hdr As String, fr As String
+    ColLikeArr = 0
+    If Not IsArray(hdrs) Then Exit Function
+    If ult > UBound(hdrs, 2) Then ult = UBound(hdrs, 2)
     For i = LBound(frags) To UBound(frags)
         fr = SemAcento(UCase$(CStr(frags(i))))
         For j = 1 To ult
-            hdr = SemAcento(UCase$(Trim$(CStr(ws.Cells(1, j).Value))))
-            If hdr = fr Then ColLike = j: Exit Function
+            hdr = SemAcento(UCase$(Trim$(CStr(hdrs(1, j)))))
+            If hdr = fr Then ColLikeArr = j: Exit Function
         Next j
     Next i
-    ' 2 passada: contm o fragmento
+    If soExata Then Exit Function
     For i = LBound(frags) To UBound(frags)
         fr = SemAcento(UCase$(CStr(frags(i))))
         For j = 1 To ult
-            hdr = SemAcento(UCase$(Trim$(CStr(ws.Cells(1, j).Value))))
-            If InStr(hdr, fr) > 0 Then ColLike = j: Exit Function
+            hdr = SemAcento(UCase$(Trim$(CStr(hdrs(1, j)))))
+            If InStr(hdr, fr) > 0 Then ColLikeArr = j: Exit Function
         Next j
     Next i
-    ColLike = 0
 End Function
 
 ' Remove acentos comuns para comparao robusta (usa cdigos Unicode - imune
@@ -789,13 +878,13 @@ Private Sub CarregarCatalogoMateriais()
         f = Application.GetOpenFilename( _
             "Excel (*.xls*),*.xls*", , _
             "Selecione o catalogo de MATERIAIS (MATERIAS_ATUAIS). Cancele para pular.")
-        If f = False Then Exit Sub   ' usurio cancelou -> segue sem catlogo
+        If f = False Then RegistrarAviso "Catalogo de MATERIAIS nao encontrado nem selecionado: a analise seguiu sem esse arquivo, so com o que esta embutido no modulo. Caminho: aba CONFIG, chaves CAT_.": Exit Sub   ' usurio cancelou -> segue sem catlogo
         caminho = CStr(f)
     End If
 
     On Error GoTo SemCat
     Dim wb As Workbook, ws As Worksheet, arr As Variant
-    Set wb = Workbooks.Open(caminho, ReadOnly:=True, UpdateLinks:=0)
+    Set wb = AbrirCatalogo(caminho)
     Set ws = wb.Worksheets(1)
 
     Dim cCod As Long, cFam As Long, c1 As Long, c2 As Long, c3 As Long
@@ -804,7 +893,7 @@ Private Sub CarregarCatalogoMateriais()
     c1 = ColLike(ws, Array("CLS1"))
     c2 = ColLike(ws, Array("CLS2"))
     c3 = ColLike(ws, Array("CLS3"))
-    If cCod = 0 Then wb.Close SaveChanges:=False: Exit Sub
+    If cCod = 0 Then FecharCatalogo wb: Exit Sub
 
     Dim ult As Long
     ult = ws.Cells(ws.Rows.Count, cCod).End(xlUp).Row
@@ -821,11 +910,13 @@ Private Sub CarregarCatalogoMateriais()
             dCatMat(cod) = fam & "|" & v1 & "|" & v2 & "|" & v3
         End If
     Next i
-    wb.Close SaveChanges:=False
+    FecharCatalogo wb
     Exit Sub
 SemCat:
+    RegistrarAviso "Catalogo nao pode ser lido (" & caminho & "): " & Err.Description & _
+                   ". A analise seguiu sem esse arquivo."
     On Error Resume Next
-    If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    FecharCatalogo wb
 End Sub
 
 ' Normaliza cdigo de material para casar base x catlogo
@@ -1482,13 +1573,13 @@ Private Sub CarregarCatalogoServicos()
         f = Application.GetOpenFilename( _
             "Excel (*.xls*),*.xls*", , _
             "Selecione o catalogo de SERVICOS (SERVICOS_ATUAIS). Cancele para pular.")
-        If f = False Then Exit Sub
+        If f = False Then RegistrarAviso "Catalogo de SERVICOS nao encontrado nem selecionado: a analise seguiu sem esse arquivo, so com o que esta embutido no modulo. Caminho: aba CONFIG, chaves CAT_.": Exit Sub
         caminho = CStr(f)
     End If
 
     On Error GoTo SemCat
     Dim wb As Workbook, ws As Worksheet, arr As Variant
-    Set wb = Workbooks.Open(caminho, ReadOnly:=True, UpdateLinks:=0)
+    Set wb = AbrirCatalogo(caminho)
     Set ws = wb.Worksheets(1)
 
     Dim cCod As Long, c1 As Long, c2 As Long, c3 As Long, cTA As Long, cSeg As Long, cTxt As Long, cUN As Long
@@ -1500,7 +1591,7 @@ Private Sub CarregarCatalogoServicos()
     cSeg = ColLike(ws, Array("SEGMENTO"))
     cTxt = ColLike(ws, Array("TEXTO BREVE", "TEXTO_BREVE", "DENOMINACAO", "DESCRICAO"))
     cUN = ColLike(ws, Array("UN BASICA", "UNID.MEDIDA", "UNIDADE", "UN"))
-    If cCod = 0 Then wb.Close SaveChanges:=False: Exit Sub
+    If cCod = 0 Then FecharCatalogo wb: Exit Sub
     If dDescSrv Is Nothing Then Set dDescSrv = CreateObject("Scripting.Dictionary")
 
     Dim ult As Long
@@ -1525,11 +1616,13 @@ Private Sub CarregarCatalogoServicos()
             If desc <> "" Then dDescSrv(cod) = desc
         End If
     Next i
-    wb.Close SaveChanges:=False
+    FecharCatalogo wb
     Exit Sub
 SemCat:
+    RegistrarAviso "Catalogo nao pode ser lido (" & caminho & "): " & Err.Description & _
+                   ". A analise seguiu sem esse arquivo."
     On Error Resume Next
-    If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    FecharCatalogo wb
 End Sub
 
 ' Overrides curados de reclassificacao CLS1/CLS2/CLS3 por COD_SERVICO
@@ -1593,13 +1686,13 @@ Private Sub CarregarCatalogoClasse()
         f = Application.GetOpenFilename( _
             "Excel (*.xls*),*.xls*", , _
             "Selecione o catalogo de CLASSE DE CUSTO (CLASSE_CUSTO_ATUAIS). Cancele para pular.")
-        If f = False Then Exit Sub
+        If f = False Then RegistrarAviso "Catalogo de CLASSE DE CUSTO nao encontrado nem selecionado: a analise seguiu sem esse arquivo, so com o que esta embutido no modulo. Caminho: aba CONFIG, chaves CAT_.": Exit Sub
         caminho = CStr(f)
     End If
 
     On Error GoTo SemCat
     Dim wb As Workbook, ws As Worksheet, arr As Variant
-    Set wb = Workbooks.Open(caminho, ReadOnly:=True, UpdateLinks:=0)
+    Set wb = AbrirCatalogo(caminho)
     Set ws = wb.Worksheets(1)
 
     Dim cCod As Long, c1 As Long, c2 As Long, c3 As Long, cTA As Long
@@ -1608,7 +1701,7 @@ Private Sub CarregarCatalogoClasse()
     c2 = ColLike(ws, Array("CLS2"))
     c3 = ColLike(ws, Array("CLS3"))
     cTA = ColLike(ws, Array("TIPO APLICACAO", "TIPO_APLICACAO", "TIPO APLIC"))
-    If cCod = 0 Then wb.Close SaveChanges:=False: Exit Sub
+    If cCod = 0 Then FecharCatalogo wb: Exit Sub
 
     Dim ult As Long
     ult = ws.Cells(ws.Rows.Count, cCod).End(xlUp).Row
@@ -1625,11 +1718,13 @@ Private Sub CarregarCatalogoClasse()
                 TextoMatriz(arr, i, cTA)
         End If
     Next i
-    wb.Close SaveChanges:=False
+    FecharCatalogo wb
     Exit Sub
 SemCat:
+    RegistrarAviso "Catalogo nao pode ser lido (" & caminho & "): " & Err.Description & _
+                   ". A analise seguiu sem esse arquivo."
     On Error Resume Next
-    If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    FecharCatalogo wb
 End Sub
 
 Private Sub CarregarClassificacaoClassesDados()
@@ -2571,13 +2666,13 @@ Private Sub CarregarConversoesCabo()
 
     On Error GoTo SemCat
     Dim wb As Workbook, ws As Worksheet, arr As Variant
-    Set wb = Workbooks.Open(caminho, ReadOnly:=True, UpdateLinks:=0)
+    Set wb = AbrirCatalogo(caminho)
     Set ws = wb.Worksheets(1)
 
     Dim cCod As Long, cFat As Long
     cCod = ColLike(ws, Array("COD MATERIAL", "COD_MATERIAL", "MATERIAL"))
     cFat = ColLike(ws, Array("FATOR"))
-    If cCod = 0 Or cFat = 0 Then wb.Close SaveChanges:=False: Exit Sub
+    If cCod = 0 Or cFat = 0 Then FecharCatalogo wb: Exit Sub
 
     Dim ult As Long
     ult = ws.Cells(ws.Rows.Count, cCod).End(xlUp).Row
@@ -2589,11 +2684,13 @@ Private Sub CarregarConversoesCabo()
         f = ToNum(arr(i, cFat))
         If cod <> "" And f > 0 And Not dCabo.Exists(cod) Then dCabo(cod) = f
     Next i
-    wb.Close SaveChanges:=False
+    FecharCatalogo wb
     Exit Sub
 SemCat:
+    RegistrarAviso "Catalogo nao pode ser lido (" & caminho & "): " & Err.Description & _
+                   ". A analise seguiu sem esse arquivo."
     On Error Resume Next
-    If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    FecharCatalogo wb
 End Sub
 
 ' Fator de converso do material (0 = sem converso)
@@ -2634,20 +2731,20 @@ Private Sub CarregarComboServico()
         f0 = Application.GetOpenFilename( _
             "Excel (*.xls*),*.xls*", , _
             "Selecione o catalogo SRV COMBO (SRV_COMBO_ATUAIS). Cancele para pular.")
-        If f0 = False Then Exit Sub
+        If f0 = False Then RegistrarAviso "Catalogo de SRV COMBO nao encontrado nem selecionado: a analise seguiu sem esse arquivo, so com o que esta embutido no modulo. Caminho: aba CONFIG, chaves CAT_.": Exit Sub
         caminho = CStr(f0)
     End If
 
     On Error GoTo SemCat
     Dim wb As Workbook, ws As Worksheet, arr As Variant
-    Set wb = Workbooks.Open(caminho, ReadOnly:=True, UpdateLinks:=0)
+    Set wb = AbrirCatalogo(caminho)
     Set ws = wb.Worksheets(1)
 
     Dim cCod As Long, cFat As Long, cFam As Long
     cCod = ColLike(ws, Array("SRV_PRINCIPAL", "SRV PRINCIPAL", "COD SERVICO", "SERVICO"))
     cFat = ColLike(ws, Array("FATOR"))
     cFam = ColLike(ws, Array("FAMILIA"))
-    If cCod = 0 Or cFat = 0 Then wb.Close SaveChanges:=False: Exit Sub
+    If cCod = 0 Or cFat = 0 Then FecharCatalogo wb: Exit Sub
 
     Dim ult As Long
     ult = ws.Cells(ws.Rows.Count, cCod).End(xlUp).Row
@@ -2661,11 +2758,13 @@ Private Sub CarregarComboServico()
         ' guarda "fator|familia"
         If cod <> "" And f > 0 And Not dCombo.Exists(cod) Then dCombo(cod) = CStr(f) & "|" & fam
     Next i
-    wb.Close SaveChanges:=False
+    FecharCatalogo wb
     Exit Sub
 SemCat:
+    RegistrarAviso "Catalogo nao pode ser lido (" & caminho & "): " & Err.Description & _
+                   ". A analise seguiu sem esse arquivo."
     On Error Resume Next
-    If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    FecharCatalogo wb
 End Sub
 
 ' Fator multiplicador do servio. So aplica quando a FAMILIA do combo bate com o
@@ -7404,16 +7503,10 @@ Private Function AtvPrevista(ByVal pep As String, ByVal valorMaoObra As Double) 
 End Function
 
 Private Function ColExata(ws As Worksheet, frags As Variant) As Long
-    Dim ult As Long, j As Long, i As Long, hdr As String, fr As String
+    ' v16: le a linha 1 de uma vez (array); so igualdade exata.
+    Dim ult As Long
     ult = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
-    For i = LBound(frags) To UBound(frags)
-        fr = SemAcento(UCase$(CStr(frags(i))))
-        For j = 1 To ult
-            hdr = SemAcento(UCase$(Trim$(CStr(ws.Cells(1, j).Value))))
-            If hdr = fr Then ColExata = j: Exit Function
-        Next j
-    Next i
-    ColExata = 0
+    ColExata = ColLikeArr(CabecalhoLinha1(ws, ult), ult, frags, True)
 End Function
 
 Private Sub AplicarFreeze(ws As Worksheet, ByVal celula As String, _
@@ -7504,6 +7597,8 @@ Private Sub Gerar_CheckCapitalizacao()
     Dim sCorte As String: sCorte = CfgTxt("CAP_DATA_CORTE", "")
     If sCorte <> "" Then
         If IsDate(DataCap(sCorte)) Then corte = DataCap(sCorte): temCorte = True
+        If Not temCorte Then RegistrarAviso "CONFIG > CAP_DATA_CORTE invalida (" & sCorte & _
+            "): use dd/mm/aaaa. O teste LOTE ENVIADO APOS O CORTE nao rodou."
     End If
     Dim percMop As Double: percMop = CfgNum("CAP_MOP_SRV_PERC", 11)
     Dim tolMop As Double: tolMop = CfgNum("CAP_MOP_SRV_TOL", 1)
@@ -7516,7 +7611,11 @@ Private Sub Gerar_CheckCapitalizacao()
     Set dSrvExtra = ListaCfgCap("CAP_CLASSES_SRV_EXTRA", "8110150000;8111290000;8990080000")
 
     Dim cData As Long
-    cData = ColLike(wsRaw, Array("DATA LCTO", "DATA LANCAMENTO", "DATA_LANCAMENTO", "DATA DE LANCAMENTO"))
+    ' v16: cabecalhos em memoria (rawHeaders) - mesma busca, sem depender da aba da base
+    cData = ColLikeArr(rawHeaders, rawColCount, _
+                       Array("DATA LCTO", "DATA LANCAMENTO", "DATA_LANCAMENTO", "DATA DE LANCAMENTO"), False)
+    If temCorte And cData = 0 Then RegistrarAviso "CHECK CAPITALIZACAO: coluna de data de lancamento " & _
+        "nao encontrada na base; o teste LOTE ENVIADO APOS O CORTE nao rodou."
 
     Dim dPep As Object: Set dPep = CreateObject("Scripting.Dictionary")   ' pep -> idx
     Dim aV() As Double: ReDim aV(0 To 7, 1 To 64)  ' 0 TOTAL 1 UC 2 COM 3 SRV 4 MOP 5 MO 6 N_APOS 7 ULT_DATA
@@ -7663,6 +7762,8 @@ ProxSrv:
     ' --- Cadastro do PEP (CN43N), quando existir -------------------------------
     Dim dMd As Object: Set dMd = CarregarCadastroCap()
     Dim temMd As Boolean: temMd = (dMd.Count > 0)
+    If Not temMd Then RegistrarAviso "Aba CN43N (dados mestres do PEP) nao encontrada ou vazia: os testes " & _
+        "de cadastro da CHECK CAPITALIZACAO (CC, TI, ODI, perfil, tranche, energizacao) nao rodaram."
     Dim dSol As Object, dRes As Object, dTI As Object, dODI As Object, dPI As Object
     Set dSol = ListaCfgCap("CAP_DIG_SOLICITANTE", "08;09;10;11;12;13;14")
     Set dRes = ListaCfgCap("CAP_DIG_RESPONSAVEL", "00;01;02;03;04;05;06;07;15;16;17;20;30;33;40;42;50;51;52;60;61;62;63;70;80;82;83;90;92;93")
@@ -8083,6 +8184,7 @@ End Function
 
 Private Sub CarregarConfig()
     Set dCfg = CreateObject("Scripting.Dictionary")
+    Set dCfgNum = Nothing              ' v16: zera o cache de CfgNum
     Set dClsViagem = CreateObject("Scripting.Dictionary")
 
     Dim ws As Worksheet
@@ -8122,11 +8224,16 @@ End Function
 Private Function CfgNum(ByVal chave As String, ByVal padrao As Double) As Double
     CfgNum = padrao
     If dCfg Is Nothing Then Exit Function
+    ' v16: cache por execucao (CfgNum e chamado dentro de lacos)
+    Dim kc As String: kc = chave & "|" & CStr(padrao)
+    If dCfgNum Is Nothing Then Set dCfgNum = CreateObject("Scripting.Dictionary")
+    If dCfgNum.Exists(kc) Then CfgNum = dCfgNum(kc): Exit Function
     Dim k As String: k = UCase$(Trim$(chave))
     If dCfg.Exists(k) Then
         Dim s As String: s = Replace(Trim$(CStr(dCfg(k))), ",", ".")
         If IsNumeric(s) Then CfgNum = Val(s)
     End If
+    dCfgNum(kc) = CfgNum
 End Function
 
 Private Function CaminhoCatalogo(ByVal chave As String, ByVal padrao As String) As String
@@ -10255,4 +10362,87 @@ Private Sub CorCategoriaChk(ByVal categoria As String, ByRef bg As Long, ByRef f
         Case Else
             bg = RGB(240, 244, 242): fg = RGB(60, 72, 66)
     End Select
+End Sub
+'==============================================================================
+'  v16 - APOIO A EXECUCAO (progresso, log, avisos, cronometro, catalogos)
+'==============================================================================
+' Registra a etapa em andamento: variavel gEtapa (mostrada em caso de erro),
+' barra de status do Excel e janela Imediata (log da execucao).
+Private Sub MarcarEtapa(ByVal nome As String)
+    gEtapa = nome
+    On Error Resume Next
+    Application.StatusBar = "CKCP " & MACRO_VERSAO & "  |  " & nome & " ..."
+    Debug.Print Format$(Now, "hh:nn:ss") & "  CKCP " & MACRO_VERSAO & "  " & nome
+    On Error GoTo 0
+End Sub
+
+' Segundos decorridos desde t0 (Timer). Timer zera a meia-noite: corrige a virada.
+Private Function Decorrido(ByVal t0 As Double) As Double
+    Dim d As Double
+    d = Timer - t0
+    If d < 0 Then d = d + 86400#
+    Decorrido = d
+End Function
+
+' Acumula um aviso (sem repetir) para o resumo do fim da execucao.
+Private Sub RegistrarAviso(ByVal texto As String)
+    If InStr(1, gAvisos, texto, vbTextCompare) > 0 Then Exit Sub
+    gAvisos = gAvisos & "- " & texto & vbLf
+    Debug.Print Format$(Now, "hh:nn:ss") & "  CKCP AVISO: " & texto
+End Sub
+
+' Mostra os avisos acumulados (nada a mostrar = nao abre caixa).
+Private Sub MostrarAvisos()
+    If gAvisos = "" Then Exit Sub
+    MsgBox "A analise terminou, mas com os avisos abaixo. Confira antes de usar o resultado:" & _
+           vbLf & vbLf & gAvisos, vbExclamation, "CKCP " & MACRO_VERSAO & " - avisos da execucao"
+End Sub
+
+' Lista as colunas obrigatorias que MapearColunas nao encontrou.
+Private Function ColunasFaltantes() As String
+    Dim s As String
+    If cPEP = 0 Then s = s & "Elemento PEP; "
+    If cClassif = 0 Then s = s & "Classificacao; "
+    If cValor = 0 Then s = s & "Valor/moeda objeto; "
+    If cQtd = 0 Then s = s & "Qtd.total entrada; "
+    If cMaterial = 0 Then s = s & "Material; "
+    If s = "" Then
+        s = "(nao identificado)"
+    Else
+        s = Left$(s, Len(s) - 2)
+    End If
+    ColunasFaltantes = s
+End Function
+
+' Abre o catalogo somente leitura. Se o arquivo ja estiver aberto no Excel
+' (mesmo caminho, ou mesmo nome numa pasta sincronizada http/OneDrive),
+' reaproveita a pasta aberta e marca gCatReusado para FecharCatalogo nao
+' fechar o arquivo do usuario.
+Private Function AbrirCatalogo(ByVal caminho As String) As Workbook
+    Dim wbA As Workbook, nomeArq As String
+    gCatReusado = False
+    nomeArq = Mid$(caminho, InStrRev(caminho, "\") + 1)
+    For Each wbA In Application.Workbooks
+        If StrComp(wbA.FullName, caminho, vbTextCompare) = 0 Then
+            gCatReusado = True
+        ElseIf StrComp(wbA.Name, nomeArq, vbTextCompare) = 0 Then
+            If LCase$(Left$(wbA.Path, 4)) = "http" Then gCatReusado = True
+        End If
+        If gCatReusado Then
+            Set AbrirCatalogo = wbA
+            Exit Function
+        End If
+    Next wbA
+    Set AbrirCatalogo = Workbooks.Open(caminho, ReadOnly:=True, UpdateLinks:=0)
+End Function
+
+' Fecha o catalogo aberto por AbrirCatalogo (sem salvar); nao fecha o que o
+' usuario ja tinha aberto.
+Private Sub FecharCatalogo(wb As Workbook)
+    If wb Is Nothing Then Exit Sub
+    If gCatReusado Then
+        gCatReusado = False
+        Exit Sub
+    End If
+    wb.Close SaveChanges:=False
 End Sub

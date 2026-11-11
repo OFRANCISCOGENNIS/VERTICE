@@ -1,5 +1,12 @@
 # Changelog — TRIPÉ
 
+## v0.1.4 — CKCP v16: robustez e avisos (2026-11-11)
+
+- `vba/AnaliseCKCP.bas` atualizado para a v16. Regras, vereditos, abas, colunas e chaves da `CONFIG` iguais à v15.
+- Catálogo já aberto no Excel é reaproveitado e não é mais fechado sem salvar; erro de leitura de catálogo vira aviso.
+- `CHECK CAPITALIZACAO` avisa data de corte inválida, coluna de data ausente e aba `CN43N` ausente.
+- Mensagem indica a coluna obrigatória que falta e a aba lida; etapa na barra de status; avisos reunidos no fim.
+
 ## v0.1.3 — CKCP v15: CHECK CAPITALIZACAO (2026-10-31)
 
 - `vba/AnaliseCKCP.bas` atualizado para a v15 (v14 + `Gerar_CheckCapitalizacao`), com os testes da planilha

@@ -1,4 +1,4 @@
-# VÉRTICE — TRIPÉ: Projeto × Baixa SAP × Serviço pago (v0.1.3)
+# VÉRTICE — TRIPÉ: Projeto × Baixa SAP × Serviço pago (v0.1.4)
 
 > *A obra só fica de pé se as três pernas baterem.*
 
@@ -133,7 +133,7 @@ Esses catálogos **não** estão neste repositório.
 - As mensagens finais de cada macro de origem ainda aparecem durante a execução; basta clicar OK.
 - A aba `RACIONALIZACAO COM` vem só do inventário (o CKCP v14 não a gera mais e a apaga ao iniciar; o TRIPÉ
   a protege com um nome temporário durante a execução do CKCP). Ela fica oculta.
-- O CKCP (v15) gera as abas `CHECK CAPITALIZACAO` e `CAP DETALHE` (testes da planilha de capitalização RD).
+- O CKCP (v16) gera as abas `CHECK CAPITALIZACAO` e `CAP DETALHE` (testes da planilha de capitalização RD).
   Preencha `CAP_DATA_CORTE` na `CONFIG` para o teste de lote enviado após o corte; os testes de cadastro
   só rodam se o arquivo tiver uma aba `CN43N`.
 - O CKCP mostra um ranking de tempo por etapa ao final; para desligar, use `MOSTRAR_TEMPOS = 0` na aba CONFIG.
