@@ -1,5 +1,15 @@
 # Changelog — TRIPÉ
 
+## v0.1.5 — CKCP v17: menos falso DEVOLVER (2026-11-12)
+
+- `vba/AnaliseCKCP.bas` atualizado para a v17. Num teste com 2 CJI3 (1.356 PEPs), o DEVOLVER caiu de 1.332 para 253.
+- Instalação/MO: o catálogo de serviços é consultado antes da classe de custo. As classes 8210040000 e 8210760000 passaram de RISCO para MÃO DE OBRA.
+- ATV DRT: contado uma vez só (ATIVAÇÃO DIRETA); teste de 25% (8% em EME/EMM) ± `ATV_TOL`; MO zero com ATV vira QUESTIONAR.
+- Linhas sem código de material (ICMS, viagem) entram na nova categoria OUTROS CUSTOS, fora de material, UC/COM e QTD x VALOR.
+- MOP com base única na CHECK CAP e na ANÁLISE DE CA: chaves `MOP_BASE` (TOTAL_SEM_MOP), `PERC_MOP` (5,483) e `MOP_TOL` (1). ODD fica N/A e SEM MOP vira QUESTIONAR.
+- Colunas: os 10 cabeçalhos padrão da CJI3 são reconhecidos, com correção de acento quebrado (mojibake). Unidades normalizadas (PEÇ/PEC → PC, un → UN).
+- Layout: ANÁLISE DE CA ganha as colunas 40 a 43; na CHECK CAP o cabeçalho "% MOP/SERVICO" passa a "% MOP/BASE".
+
 ## v0.1.4 — CKCP v16: robustez e avisos (2026-11-11)
 
 - `vba/AnaliseCKCP.bas` atualizado para a v16. Regras, vereditos, abas, colunas e chaves da `CONFIG` iguais à v15.

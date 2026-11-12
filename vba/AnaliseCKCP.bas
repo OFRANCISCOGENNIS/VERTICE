@@ -13,6 +13,27 @@ Attribute VB_Name = "AnaliseCKCP"
 '   "Valor/moeda objeto", "Classificao", "Descrio SA", etc.
 '==============================================================================
 '------------------------------------------------------------------------------
+'  VERSAO: v17 (2026-11-12)  -  projeto VERTICE
+'  Mudancas da v17 sobre a v16 (correcao de falsos positivos de DEVOLVER):
+'   1. CategoriaAnaliseCA: catalogo de SERVICOS (pelo codigo) antes da classe
+'      de custo; classe vira fallback. Classes 8210040000 e 8210760000
+'      (Servicos de Construcao / RD) passam de RISCO para MAO DE OBRA. Na
+'      CHECK CAPITALIZACAO, codigo do catalogo de servicos conta como servico
+'      de instalacao (exceto ATIVACAO DIRETA e MOP).
+'   2. ATV DRT contado uma vez so (direto em ATIVACAO DIRETA; antes somava na
+'      categoria da classe e de novo em ATIVACAO DIRETA). Teste ATV/MO
+'      (PERC_ATV_PADRAO / PERC_ATV_EME +- ATV_TOL) com STATUS ATV DRT; MO zero
+'      com ATV gera aviso e QUESTIONAR (StatusAtvDrt).
+'   3. Classificacao "Falta codigo Material" (ICMS, viagem...) = OUTROS CUSTOS
+'      (EhOutrosCustos): fora de material, UC/COM, QTD x VALOR e MAT vs SRV;
+'      soma no total e no CA pela classe de custo; aviso com contagem.
+'   4. MOP unico (MopPapelLinha/StatusMop) na CHECK CAPITALIZACAO e na
+'      ANALISE DE CA: CONFIG MOP_BASE (TOTAL_SEM_MOP | CA | SERVICO), PERC_MOP
+'      e MOP_TOL. ODD nao e testada. SEM MOP = QUESTIONAR (nao bloqueia).
+'   5. Cabecalhos do layout CJI3 padrao (Data de lancamento, N documento...),
+'      acentos minusculos, o/a ordinais e mojibake (CorrigirMojibake) no
+'      ColLike; unidade normalizada na carga (NormUnidade: PEC -> PC, un -> UN).
+'------------------------------------------------------------------------------
 '  VERSAO: v16 (2026-11-11)  -  projeto VERTICE
 '  Mudancas da v16 sobre a v15 (nenhuma regra de negocio / veredito alterado):
 '   1. Barra de status com a etapa em andamento + log na janela Imediata
@@ -36,13 +57,15 @@ Attribute VB_Name = "AnaliseCKCP"
 Option Explicit
 
 ' Versao do modulo (barra de status, mensagens e log)
-Private Const MACRO_VERSAO As String = "v16 2026-11-11"
+Private Const MACRO_VERSAO As String = "v17 2026-11-12"
 ' v16: avisos acumulados na execucao, exibidos por MostrarAvisos
 Private gAvisos As String
 ' v16: True quando o catalogo ja estava aberto no Excel (nao fechar)
 Private gCatReusado As Boolean
 ' v16: cache de CfgNum (CHAVE|padrao -> valor), refeito a cada CarregarConfig
 Private dCfgNum As Object
+' v17: cache do MOP unico (classes de MOP, classes de servico extra, base)
+Private dMopClsG As Object, dSrvExtraG As Object, gMopBase As String
 
 ' Rastreio de etapa para diagnostico de erros (exibido no handler Falha)
 Private gEtapa As String
@@ -184,6 +207,7 @@ Sub GerarRelatorio()
     gAvisos = ""                          ' v16: avisos da execucao (MostrarAvisos)
     Set dNormCache = Nothing              ' v16: caches de normalizacao nao crescem
     Set dSemAcCache = Nothing             '      de uma execucao para a outra
+    Set dMopClsG = Nothing: Set dSrvExtraG = Nothing: gMopBase = ""   ' v17
     Set wbAlvo = ActiveWorkbook
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
@@ -555,20 +579,20 @@ Private Function MapearColunas(ws As Worksheet) As Boolean
     If cDivisao = 0 Then cDivisao = ColLike(ws, Array("EMPRESA"))
 
     cObj = ColLike(ws, Array("OBJETO"))
-    cDenObj = ColLike(ws, Array("DENOMINACAO_OBJETO", "DENOMINACAO OBJETO"))
+    cDenObj = ColLike(ws, Array("DENOMINACAO_OBJETO", "DENOMINACAO OBJETO", "DENOMINACAO DE OBJETO"))
     cDenClasse = ColLike(ws, Array("DENOM_CLASSE_CUSTO", "DENOM CLASSE CUSTO"))
-    cDocCompra = ColLike(ws, Array("DOC_COMPRA", "DOC COMPRA"))
-    cNumDoc = ColLike(ws, Array("NUM_DOC", "NUM DOC"))
+    cDocCompra = ColLike(ws, Array("DOC_COMPRA", "DOC COMPRA", "DOCUMENTO DE COMPRAS"))
+    cNumDoc = ColLike(ws, Array("NUM_DOC", "NUM DOC", "N DOCUMENTO"))
     cDenominacao = ColLike(ws, Array("DENOMINACAO"))
     cUsuario = ColLike(ws, Array("USUARIO"))
-    cNumDocRef = ColLike(ws, Array("NUM_DOC_REF", "NUM DOC REF"))
-    cDataLanc = ColLike(ws, Array("DATA_LANCAMENTO", "DATA LANCAMENTO"))
+    cNumDocRef = ColLike(ws, Array("NUM_DOC_REF", "NUM DOC REF", "N DOC.DE REFERENCIA", "N DOC DE REFERENCIA"))
+    cDataLanc = ColLike(ws, Array("DATA_LANCAMENTO", "DATA LANCAMENTO", "DATA DE LANCAMENTO"))
     cHora = ColLike(ws, Array("HORA"))
-    cDataEntrada = ColLike(ws, Array("DATA_ENTRADA", "DATA ENTRADA"))
-    cTipoDoc = ColLike(ws, Array("TIPO_DOC", "TIPO DOC"))
-    cAno = ColLike(ws, Array("ANO"))
-    cDataDoc = ColLike(ws, Array("DATA_DOCUMENTO", "DATA DOCUMENTO"))
-    cLinhaLanc = ColLike(ws, Array("LINHA LANCAMENTO", "LINHA_LANCAMENTO"))
+    cDataEntrada = ColLike(ws, Array("DATA_ENTRADA", "DATA ENTRADA", "DATA DE ENTRADA"))
+    cTipoDoc = ColLike(ws, Array("TIPO_DOC", "TIPO DOC", "TIPO DE DOCUMENTO"))
+    cAno = ColLike(ws, Array("ANO", "EXERCICIO"))
+    cDataDoc = ColLike(ws, Array("DATA_DOCUMENTO", "DATA DOCUMENTO", "DATA DO DOCUMENTO"))
+    cLinhaLanc = ColLike(ws, Array("LINHA LANCAMENTO", "LINHA_LANCAMENTO", "LINHA DE LANCAMENTO"))
     cODI = ColLike(ws, Array("ODI_ANEEL", "ODI ANEEL"))
 
     ' FASE 1.3: "SA" so por igualdade exata (a busca por substring casava
@@ -579,7 +603,7 @@ Private Function MapearColunas(ws As Worksheet) As Boolean
     cOrgEstorno = ColLike(ws, Array("ORG_ESTORNO", "ORG ESTORNO"))
     cEstorno = ColLike(ws, Array("ESTORNO"))
     cRefEstorno = ColLike(ws, Array("REF_ESTORNO", "REF ESTORNO"))
-    cOperRef = ColLike(ws, Array("OPERACAO_REFERENCIA", "OPERACAO REFERENCIA"))
+    cOperRef = ColLike(ws, Array("OPERACAO_REFERENCIA", "OPERACAO REFERENCIA", "OPERACAO REF"))
     cCLS1Raw = ColLike(ws, Array("CLS1"))
     cCLS2Raw = ColLike(ws, Array("CLS2"))
     cCLS3Raw = ColLike(ws, Array("CLS3"))
@@ -599,9 +623,9 @@ End Function
 
 Private Function PontuarBase(ws As Worksheet) As Long
     PontuarBase = ws.Cells(ws.Rows.Count, ColLike(ws, Array("ELEMENTO PEP", "PEP"))).End(xlUp).Row
-    If ColLike(ws, Array("NUM_DOC", "NUM DOC")) > 0 Then PontuarBase = PontuarBase + 1000000
-    If ColLike(ws, Array("DATA_LANCAMENTO", "DATA LANCAMENTO")) > 0 Then PontuarBase = PontuarBase + 1000000
-    If ColLike(ws, Array("OPERACAO_REFERENCIA", "OPERACAO REFERENCIA")) > 0 Then PontuarBase = PontuarBase + 1000000
+    If ColLike(ws, Array("NUM_DOC", "NUM DOC", "N DOCUMENTO")) > 0 Then PontuarBase = PontuarBase + 1000000
+    If ColLike(ws, Array("DATA_LANCAMENTO", "DATA LANCAMENTO", "DATA DE LANCAMENTO")) > 0 Then PontuarBase = PontuarBase + 1000000
+    If ColLike(ws, Array("OPERACAO_REFERENCIA", "OPERACAO REFERENCIA", "OPERACAO REF")) > 0 Then PontuarBase = PontuarBase + 1000000
     If ColLike(ws, Array("OBJETO")) > 0 Then PontuarBase = PontuarBase + 1000000
 End Function
 
@@ -638,7 +662,7 @@ Private Function ColLikeArr(hdrs As Variant, ByVal ult As Long, frags As Variant
     For i = LBound(frags) To UBound(frags)
         fr = SemAcento(UCase$(CStr(frags(i))))
         For j = 1 To ult
-            hdr = SemAcento(UCase$(Trim$(CStr(hdrs(1, j)))))
+            hdr = SemAcento(UCase$(Trim$(CorrigirMojibake(CStr(hdrs(1, j))))))   ' v17: mojibake
             If hdr = fr Then ColLikeArr = j: Exit Function
         Next j
     Next i
@@ -646,7 +670,7 @@ Private Function ColLikeArr(hdrs As Variant, ByVal ult As Long, frags As Variant
     For i = LBound(frags) To UBound(frags)
         fr = SemAcento(UCase$(CStr(frags(i))))
         For j = 1 To ult
-            hdr = SemAcento(UCase$(Trim$(CStr(hdrs(1, j)))))
+            hdr = SemAcento(UCase$(Trim$(CorrigirMojibake(CStr(hdrs(1, j))))))   ' v17: mojibake
             If InStr(hdr, fr) > 0 Then ColLikeArr = j: Exit Function
         Next j
     Next i
@@ -666,8 +690,85 @@ Private Function SemAcento(ByVal s As String) As String
     For k = LBound(cods) To UBound(cods)
         s = Replace(s, ChrW(CLng(cods(k))), subs(k))
     Next k
+    ' v17: minusculas (caso o UCase nao converta), U trema e ordinais/grau (N. -> N)
+    cods = Array(224, 225, 226, 227, 228, 233, 234, 232, 237, 238, 243, 244, 245, 246, 250, 251, 231, 220, 252, 186, 170, 176)
+    subs = Array("A", "A", "A", "A", "A", "E", "E", "E", "I", "I", "O", "O", "O", "O", "U", "U", "C", "U", "U", "", "", "")
+    For k = LBound(cods) To UBound(cods)
+        s = Replace(s, ChrW(CLng(cods(k))), subs(k))
+    Next k
     dSemAcCache(sOrig) = s
     SemAcento = s
+End Function
+
+' v17: conserta mojibake comum (texto UTF-8 lido como latin-1/cp1252), ex.:
+' "Classifica" + "Ã§Ã£o". Regras: "Ã" + byte 0x80-0xBF -> caractere (byte +
+' 0x40); "Â" + byte 0xA0-0xBF -> o proprio byte. Idempotente: texto sem esses
+' pares volta igual. Usado nos cabecalhos (ColLikeArr) e na unidade.
+Private Function CorrigirMojibake(ByVal s As String) As String
+    CorrigirMojibake = s
+    If InStr(s, ChrW(195)) = 0 And InStr(s, ChrW(194)) = 0 Then Exit Function
+    Dim i As Long, n As Long, c As Long, b As Long, r As String, usou As Boolean
+    n = Len(s): i = 1
+    Do While i <= n
+        usou = False
+        c = AscW(Mid$(s, i, 1)) And &HFFFF&
+        If (c = 195 Or c = 194) And i < n Then
+            b = ByteCp1252(AscW(Mid$(s, i + 1, 1)) And &HFFFF&)
+            If c = 195 And b >= 128 And b <= 191 Then
+                r = r & ChrW(b + 64): i = i + 2: usou = True
+            ElseIf c = 194 And b >= 160 And b <= 191 Then
+                r = r & ChrW(b): i = i + 2: usou = True
+            End If
+        End If
+        If Not usou Then r = r & Mid$(s, i, 1): i = i + 1
+    Loop
+    CorrigirMojibake = r
+End Function
+
+' v17: byte original de um caractere lido como cp1252 (0x80-0x9F viram
+' simbolos como o duplo punhal). Retorna -1 se nao for um byte unico.
+Private Function ByteCp1252(ByVal cp As Long) As Long
+    If cp >= 0 And cp <= 255 Then ByteCp1252 = cp: Exit Function
+    Select Case cp
+        Case 8364: ByteCp1252 = 128
+        Case 8218: ByteCp1252 = 130
+        Case 402: ByteCp1252 = 131
+        Case 8222: ByteCp1252 = 132
+        Case 8230: ByteCp1252 = 133
+        Case 8224: ByteCp1252 = 134
+        Case 8225: ByteCp1252 = 135
+        Case 710: ByteCp1252 = 136
+        Case 8240: ByteCp1252 = 137
+        Case 352: ByteCp1252 = 138
+        Case 8249: ByteCp1252 = 139
+        Case 338: ByteCp1252 = 140
+        Case 381: ByteCp1252 = 142
+        Case 8216: ByteCp1252 = 145
+        Case 8217: ByteCp1252 = 146
+        Case 8220: ByteCp1252 = 147
+        Case 8221: ByteCp1252 = 148
+        Case 8226: ByteCp1252 = 149
+        Case 8211: ByteCp1252 = 150
+        Case 8212: ByteCp1252 = 151
+        Case 732: ByteCp1252 = 152
+        Case 8482: ByteCp1252 = 153
+        Case 353: ByteCp1252 = 154
+        Case 8250: ByteCp1252 = 155
+        Case 339: ByteCp1252 = 156
+        Case 382: ByteCp1252 = 158
+        Case 376: ByteCp1252 = 159
+        Case Else: ByteCp1252 = -1
+    End Select
+End Function
+
+' v17: unidade padronizada (trim, maiuscula, sem acento, mojibake): "un" -> "UN",
+' "PEC" com ou sem cedilha -> "PC" (unidade com acento quebra o CSV da ZFI0003).
+Private Function NormUnidade(ByVal u As Variant) As Variant
+    NormUnidade = u
+    If IsError(u) Or IsEmpty(u) Or IsNull(u) Then Exit Function
+    Dim s As String: s = SemAcento(UCase$(Trim$(CorrigirMojibake(CStr(u)))))
+    If s = "PEC" Then s = "PC"
+    NormUnidade = s
 End Function
 
 Private Sub CarregarDados(ws As Worksheet)
@@ -691,6 +792,12 @@ Private Sub CarregarDados(ws As Worksheet)
     For i = 1 To UBound(dados, 1)
         If Trim$(CStr(dados(i, cPEP))) <> "" Then nLin = nLin + 1
     Next i
+    ' v17: unidade padronizada na carga (vale para todas as abas)
+    If cUML > 0 And cUML <= UBound(dados, 2) Then
+        For i = 1 To UBound(dados, 1)
+            dados(i, cUML) = NormUnidade(dados(i, cUML))
+        Next i
+    End If
 End Sub
 
 Private Function ValorCampo(ByVal lin As Long, ByVal col As Long, Optional ByVal padrao As Variant = "") As Variant
@@ -1792,7 +1899,7 @@ Private Sub CarregarClassificacaoClassesDados()
 
     ' --- Servicos especificos --------------------------------------------
     AddClasseCusto "8210400000", "OUTROS", "MOBILIDADE", "SUPORTE"     ' Servicos de Conducao
-    AddClasseCusto "8210040000", "OUTROS", "RISCO", "RISCO"            ' Servicos de Construcao
+    AddClasseCusto "8210040000", "OUTROS", "MAO DE OBRA", "MAO DE OBRA" ' Servicos de Construcao (v17: era RISCO)
     AddClasseCusto "8210520000", "SERVICO", "FRETE/TRANSP", "FRETE/TRANSP"  ' Servicos de Fretes
     AddClasseCusto "8210550000", "OUTROS", "HOSPEDAGEM", "SUPORTE"     ' Servicos de Hospedagem
     AddClasseCusto "8210430000", "OUTROS", "MEIO-AMBIENTE", "MEIO-AMBIENTE"  ' Servicos de Meio Ambiente
@@ -2270,7 +2377,7 @@ Private Sub CarregarClassesCustoAuto()
     AddClasseCusto "8210660000", "OUTROS", "OUTROS", "RISCO"
     AddClasseCusto "8210710000", "OUTROS", "OUTROS", "RISCO"
     AddClasseCusto "8210750000", "OUTROS", "OUTROS", "RISCO"
-    AddClasseCusto "8210760000", "OUTROS", "OUTROS", "RISCO"
+    AddClasseCusto "8210760000", "OUTROS", "MAO DE OBRA", "MAO DE OBRA" ' Servicos de Construcao RD (v17: era RISCO)
     AddClasseCusto "8210770000", "OUTROS", "CC_SERVICO", "RISCO"
     AddClasseCusto "8210780000", "OUTROS", "OUTROS", "RISCO"
     AddClasseCusto "8210790000", "OUTROS", "RESCISAO CONTRATUAL", "RISCO"
@@ -4601,6 +4708,15 @@ Private Function EhMaterial(ByVal classif As String) As Boolean
     EhMaterial = (c = "UC" Or c = "COM" Or c = "UAR" Or InStr(c, "FALTA") > 0)
 End Function
 
+' v17: linha sem codigo de material (classificacao "Falta codigo Material":
+' ICMS, alimentacao/viagem...) = OUTROS CUSTOS (IMPOSTO/DESPESA). EhMaterial
+' continua True para ela (assim nao cai nos testes de SERVICO), mas os testes
+' de MATERIAL (UC/COM, QTD x VALOR, MAT vs SRV, preco) a ignoram; o valor
+' soma no total do PEP e no CA pela classe de custo.
+Private Function EhOutrosCustos(ByVal classif As String) As Boolean
+    EhOutrosCustos = (InStr(UCase$(Trim$(classif)), "FALTA") > 0)
+End Function
+
 Private Function ToNum(v As Variant) As Double
     If IsNumeric(v) Then ToNum = CDbl(v) Else ToNum = 0
 End Function
@@ -4711,6 +4827,7 @@ Private Sub Gerar_MaterialVsServico()
     For i = 1 To UBound(dados, 1)
         pep = Trim$(CStr(dados(i, cPEP))): If pep = "" Then GoTo Prox
         q = ToNum(dados(i, cQtd))
+        If EhOutrosCustos(CStr(dados(i, cClassif))) Then GoTo Prox   ' v17: OUTROS CUSTOS
         If EhMaterial(CStr(dados(i, cClassif))) Then
             cls2 = MatInfoLinha(i, 2)                  ' CLS2 do catalogo/base enriquecida
             If cls2 = "" Then cls2 = "(SEM CLS2)"
@@ -5458,6 +5575,9 @@ Private Sub Gerar_AnaliseCA()
     Set dPepTot = CreateObject("Scripting.Dictionary")
     Set dEmp = CreateObject("Scripting.Dictionary")
     Set dMaoCLS3 = CreateObject("Scripting.Dictionary")
+    Dim dMopU As Object, dBaseU As Object        ' v17: MOP unico por PEP
+    Set dMopU = CreateObject("Scripting.Dictionary")
+    Set dBaseU = CreateObject("Scripting.Dictionary")
 
     Dim i As Long, pep As String, cat As String, val As Double, k As String
     For i = 1 To UBound(dados, 1)
@@ -5478,23 +5598,19 @@ Private Sub Gerar_AnaliseCA()
             dGrp(pep & "|VALOR MATERIAL") = dGrp(pep & "|VALOR MATERIAL") + val
         End If
 
-        ' Acumula ATIVACAO DIRETA quando o servico tem CLS2 = "ATV DRT"
-        ' (mesmo quando ja foi classificado em FISCALIZACAO / APOIO A OBRA /
-        '  COMISSIONAMENTO / PROJETO pelo CLS3).
-        If Not EhMaterial(CStr(dados(i, cClassif))) Then
-            Dim cls2srv As String
-            cls2srv = UCase$(SemAcento(SrvInfoLinha(i, 1)))
-            If (InStr(cls2srv, "ATV DRT") > 0 Or InStr(cls2srv, "ATIVACAO") > 0) _
-               And cat <> "ATIVACAO DIRETA" Then
-                dGrp(pep & "|ATIVACAO DIRETA") = dGrp(pep & "|ATIVACAO DIRETA") + val
-            End If
-        End If
+        ' v17: ATV DRT ja vem de CategoriaAnaliseCA (conta uma vez so; a v16
+        ' somava de novo aqui e inflava ATIVACAO DIRETA e o TOTAL por categoria).
+        ' v17: MOP unico (mesma regra da CHECK CAPITALIZACAO)
+        Select Case MopPapelLinha(i)
+            Case 1: dMopU(pep) = dMopU(pep) + val
+            Case 2: dBaseU(pep) = dBaseU(pep) + val
+        End Select
 P1:
     Next i
 
     If dPEP.Count = 0 Then Exit Sub
     Dim peps As Variant: peps = dPEP.Keys
-    Dim outp() As Variant: ReDim outp(0 To dPEP.Count, 1 To 39)
+    Dim outp() As Variant: ReDim outp(0 To dPEP.Count, 1 To 43)
     outp(0, 1) = "EMPRESA": outp(0, 2) = "PEP4NIVEL"
     Dim j As Long
     For j = 0 To UBound(cats): outp(0, 3 + j) = cats(j): Next j
@@ -5506,6 +5622,12 @@ P1:
     outp(0, 36) = "TOTAL CA SEM MOP": outp(0, 37) = "CALCULO DO MOP"
     outp(0, 38) = "DIF MOP"
     outp(0, 39) = "MAO DE OBRA CLS3"
+    ' v17: MOP unico e teste ATV DRT (colunas novas no fim; as antigas ficam)
+    outp(0, 40) = "TOTAL BASE MOP (" & MopModo() & ")"
+    outp(0, 41) = "VALOR MOP (CLASSES)"
+    outp(0, 42) = "STATUS MOP"
+    outp(0, 43) = "STATUS ATV DRT"
+    Dim mopU As Double, baseU As Double, nAtvSemMo As Long, stAtv As String
 
     Dim r As Long, tot As Double, v As Double, mao As Double, atv As Double
     Dim mop As Double, totalSemMop As Double, matUc As Double, atvPrev As Double, calcMop As Double
@@ -5527,11 +5649,19 @@ P1:
         totalSemMop = tot - mop
         ' ATV PREVISTA centralizada (8% EME/EMM, 25% demais) - FASE 1.1
         atvPrev = AtvPrevista(pep, mao)
-        calcMop = Round(totalSemMop * (CfgNum("PERC_MOP", 5.483) / 100), 2)
+        ' v17: CALCULO/DIF/PORC MOP sobre a base unica (CONFIG MOP_BASE)
+        mopU = 0: baseU = 0
+        If dMopU.Exists(pep) Then mopU = dMopU(pep)
+        If dBaseU.Exists(pep) Then baseU = dBaseU(pep)
+        calcMop = Round(baseU * (CfgNum("PERC_MOP", 5.483) / 100), 2)
 
         outp(r + 1, 27) = Round(tot, 2)
-        If mao <> 0 Then outp(r + 1, 28) = Round(atv / mao * 100, 2) & "%"
-        If totalSemMop <> 0 Then outp(r + 1, 29) = Round(mop / totalSemMop * 100, 2) & "%"
+        If mao <> 0 Then
+            outp(r + 1, 28) = Round(atv / mao * 100, 2) & "%"
+        ElseIf Round(atv, 2) <> 0 Then
+            outp(r + 1, 28) = "SEM MAO DE OBRA"
+        End If
+        If Round(baseU, 2) <> 0 Then outp(r + 1, 29) = Round(mopU / baseU * 100, 2) & "%"
         If tot <> 0 Then outp(r + 1, 30) = Round(matUc / tot * 100, 2) & "%"
         outp(r + 1, 31) = TipoPEPCodigo(pep)
         outp(r + 1, 32) = atvPrev
@@ -5539,11 +5669,24 @@ P1:
         outp(r + 1, 34) = ValorCat(dGrp, pep, "FRETE_TRANSP")
         outp(r + 1, 35) = SegmentoPI(pep)
         outp(r + 1, 36) = Round(totalSemMop, 2)
-        outp(r + 1, 37) = calcMop
-        outp(r + 1, 38) = Round(mop - calcMop, 2)
+        If TipoPEPCodigo(pep) = "D" Then
+            outp(r + 1, 37) = "N/A (ODD)": outp(r + 1, 38) = "N/A (ODD)"
+        Else
+            outp(r + 1, 37) = calcMop
+            outp(r + 1, 38) = Round(mopU - calcMop, 2)
+        End If
         outp(r + 1, 39) = Round(IIf(dMaoCLS3.Exists(pep), dMaoCLS3(pep), 0), 2)
+        outp(r + 1, 40) = Round(baseU, 2)
+        outp(r + 1, 41) = Round(mopU, 2)
+        outp(r + 1, 42) = StatusMop(TipoPEPCodigo(pep), mopU, baseU)
+        stAtv = StatusAtvDrt(pep, atv, mao)
+        outp(r + 1, 43) = stAtv
+        If stAtv = "SEM MAO DE OBRA - VERIFICAR" Then nAtvSemMo = nAtvSemMo + 1
     Next r
     EscreverAba "ANALISE DE CA", outp
+    If nAtvSemMo > 0 Then RegistrarAviso "ANALISE DE CA: " & nAtvSemMo & " PEP(s) com ATV DRT e MAO DE OBRA " & _
+        "zero - o teste ATV/MO (" & CfgNum("PERC_ATV_PADRAO", 25) & "%; " & CfgNum("PERC_ATV_EME", 8) & _
+        "% EME/EMM) nao pode ser calculado. Ver coluna STATUS ATV DRT."
 End Sub
 
 
@@ -5556,7 +5699,29 @@ Private Function CategoriaAnaliseCA(ByVal lin As Long) As String
     Dim cls2 As String, cls3 As String, c As String, cl As String, cat As String
     cl = UCase$(SemAcento(CStr(dados(lin, cClassif))))
 
-    ' A classe de custo e a fonte mais confiavel para indiretos da ANALISE DE CA.
+    ' v17: OUTROS CUSTOS (sem codigo de material) -> so pela classe de custo
+    If EhOutrosCustos(cl) Then
+        cat = CategoriaPorClasseCusto(lin)
+        If cat = "" Or cat = "MAT UC" Or cat = "MAT COM" Or cat = "VALOR MATERIAL" Then cat = "OUTROS"
+        CategoriaAnaliseCA = cat: Exit Function
+    End If
+
+    If Not EhMaterial(cl) Then
+        If ClasseCustoDadosOutros(ValorCampo(lin, cClasse)) Then CategoriaAnaliseCA = "OUTROS": Exit Function
+        ' v17: ATV DRT conta uma vez so, direto em ATIVACAO DIRETA
+        cls2 = UCase$(SemAcento(SrvInfoLinha(lin, 1)))
+        If InStr(cls2, "ATV DRT") > 0 Or InStr(cls2, "ATIVACAO") > 0 Then
+            CategoriaAnaliseCA = "ATIVACAO DIRETA": Exit Function
+        End If
+        ' v17: catalogo de SERVICOS (pelo codigo) antes da classe de custo
+        If EhCodServicoCap(NormCod(dados(lin, cMaterial))) Then
+            cat = MapCategoriaCA(SrvInfo(dados(lin, cMaterial), 2))
+            If cat = "" Then cat = MapCategoriaCA(SrvInfo(dados(lin, cMaterial), 1))
+            If cat <> "" Then CategoriaAnaliseCA = cat: Exit Function
+        End If
+    End If
+
+    ' Classe de custo: fonte dos indiretos sem codigo e fallback do servico (v17).
     cat = CategoriaPorClasseCusto(lin)
     If cat <> "" Then CategoriaAnaliseCA = cat: Exit Function
 
@@ -5725,6 +5890,7 @@ Private Sub Gerar_Material()
     For i = 1 To UBound(dados, 1)
         pep = Trim$(CStr(dados(i, cPEP))): If pep = "" Then GoTo Prox
         If Not EhMaterial(CStr(dados(i, cClassif))) Then GoTo Prox
+        If EhOutrosCustos(CStr(dados(i, cClassif))) Then GoTo Prox   ' v17: OUTROS CUSTOS
         cod = NormCod(dados(i, cMaterial))
         cl = UCase$(Trim$(CStr(dados(i, cClassif))))
         k = pep & "|" & cod & "|" & cl
@@ -6333,6 +6499,7 @@ SomaPep:
     For i = 1 To UBound(dados, 1)
         pep = Trim$(CStr(dados(i, cPEP))): If pep = "" Then GoTo ProxBcalc
         If Not EhMaterial(CStr(dados(i, cClassif))) Then GoTo ProxBcalc
+        If EhOutrosCustos(CStr(dados(i, cClassif))) Then GoTo ProxBcalc   ' v17
         codG = NormCod(dados(i, cMaterial))
         clG = UCase$(Trim$(CStr(dados(i, cClassif))))
         kG = pep & "|" & codG & "|" & clG
@@ -6909,7 +7076,7 @@ Private Sub Gerar_PainelExecutivo()
 
         dVTot(p3Pn) = dVTot(p3Pn) + valPn
 
-        If EhMaterial(CStr(dados(i, cClassif))) Then
+        If EhMaterial(CStr(dados(i, cClassif))) And Not EhOutrosCustos(CStr(dados(i, cClassif))) Then
             dVMat(p3Pn) = dVMat(p3Pn) + valPn
             If qPn > 0 And valPn <= 0 Then dQtdSemV(p3Pn) = "S"
             If qPn < 0 And valPn >= 0 Then dValSemQ(p3Pn) = "S"
@@ -7151,7 +7318,7 @@ Private Sub Gerar_ServicoSemMaterial()
     ' 1a passada: total de material por PEP|familia
     For i = 1 To UBound(dados, 1)
         pepSM = Trim$(CStr(dados(i, cPEP))): If pepSM = "" Then GoTo P1
-        If EhMaterial(CStr(dados(i, cClassif))) Then
+        If EhMaterial(CStr(dados(i, cClassif))) And Not EhOutrosCustos(CStr(dados(i, cClassif))) Then
             cls2SM = FamiliaAlias(MatInfoLinha(i, 2), True)
             If cls2SM = "" Then cls2SM = "(SEM CLS2)"
             kSM = pepSM & "|" & cls2SM
@@ -7502,6 +7669,83 @@ Private Function AtvPrevista(ByVal pep As String, ByVal valorMaoObra As Double) 
     AtvPrevista = Round(valorMaoObra * perc, 2)
 End Function
 
+' v17: teste ATV DRT / MAO DE OBRA (mesma regra na ANALISE DE CA e na CHECK
+' CAPITALIZACAO): PERC_ATV_PADRAO (PERC_ATV_EME em EME/EMM) +- ATV_TOL pontos.
+' MO zero com ATV <> 0 nao e pulado em silencio: "SEM MAO DE OBRA - VERIFICAR".
+Private Function StatusAtvDrt(ByVal pep As String, ByVal atv As Double, ByVal mao As Double) As String
+    If TipoPEPCodigo(pep) = "D" Then StatusAtvDrt = "N/A (ODD)": Exit Function
+    If Round(mao, 2) = 0 Then
+        If Round(atv, 2) <> 0 Then StatusAtvDrt = "SEM MAO DE OBRA - VERIFICAR" Else StatusAtvDrt = "SEM MO E SEM ATV"
+        Exit Function
+    End If
+    Dim perc As Double
+    If EhPepEmergencia(pep) Then perc = CfgNum("PERC_ATV_EME", 8) Else perc = CfgNum("PERC_ATV_PADRAO", 25)
+    If Abs(atv / mao * 100 - perc) > CfgNum("ATV_TOL", 5) Then
+        StatusAtvDrt = "FORA DA FAIXA"
+    Else
+        StatusAtvDrt = "OK"
+    End If
+End Function
+
+' v17: base do MOP (CONFIG MOP_BASE). TOTAL_SEM_MOP (padrao) = todas as linhas
+' do PEP menos o MOP - a mesma base em que o PERC_MOP 5,483% foi calibrado;
+' CA = linhas com Classificacao CA (sem o MOP); SERVICO = classes 82* e
+' CAP_CLASSES_SRV_EXTRA (regra antiga da CHECK CAPITALIZACAO, 11%).
+Private Function MopModo() As String
+    If gMopBase = "" Then
+        gMopBase = UCase$(Replace(Trim$(CfgTxt("MOP_BASE", "TOTAL_SEM_MOP")), " ", "_"))
+        Select Case gMopBase
+            Case "TOTAL_SEM_MOP", "CA", "SERVICO"
+            Case Else
+                RegistrarAviso "CONFIG > MOP_BASE invalida (" & gMopBase & _
+                    "): use TOTAL_SEM_MOP, CA ou SERVICO. Usado TOTAL_SEM_MOP."
+                gMopBase = "TOTAL_SEM_MOP"
+        End Select
+    End If
+    MopModo = gMopBase
+End Function
+
+' v17: papel da linha no MOP unico: 1 = MOP (classes CAP_CLASSES_MOP, linha
+' que nao e material), 2 = base do MOP (conforme MopModo), 0 = fora.
+Private Function MopPapelLinha(ByVal i As Long) As Long
+    If dMopClsG Is Nothing Then
+        Set dMopClsG = ListaCfgCap("CAP_CLASSES_MOP", "8010260000;8010270000;8010280000;8010290000;8110260000;8110270000;8110280000;8110290000;8210260000;8210270000;8210280000;8210290000;8990260000;8990270000;8990280000;8990290000;8950270000;8950280000;8010420000;8019930000;8119930000;8990020000")
+        Set dSrvExtraG = ListaCfgCap("CAP_CLASSES_SRV_EXTRA", "8110150000;8111290000;8990080000")
+    End If
+    Dim cl As String, cc As String
+    cl = UCase$(Trim$(CStr(dados(i, cClassif))))
+    cc = NormCod(ValorCampo(i, cClasse))
+    If Not EhMaterial(cl) And dMopClsG.Exists(cc) Then MopPapelLinha = 1: Exit Function
+    Select Case MopModo()
+        Case "CA"
+            If cl = "CA" Then MopPapelLinha = 2
+        Case "SERVICO"
+            If Not EhMaterial(cl) And (Left$(cc, 2) = "82" Or dSrvExtraG.Exists(cc)) Then MopPapelLinha = 2
+        Case Else
+            MopPapelLinha = 2
+    End Select
+End Function
+
+' v17: status do MOP unico: N/A (ODD) | SEM BASE | MOP SEM BASE | SEM MOP |
+' MOP ACIMA | MOP ABAIXO | OK  (PERC_MOP +- MOP_TOL pontos sobre a base).
+Private Function StatusMop(ByVal tp As String, ByVal mop As Double, ByVal bas As Double) As String
+    If tp = "D" Then StatusMop = "N/A (ODD)": Exit Function
+    If Round(bas, 2) = 0 Then
+        If Round(mop, 2) = 0 Then StatusMop = "SEM BASE" Else StatusMop = "MOP SEM BASE"
+        Exit Function
+    End If
+    If Round(mop, 2) = 0 Then StatusMop = "SEM MOP": Exit Function
+    Dim pct As Double, perc As Double, tol As Double
+    pct = mop / bas * 100: perc = CfgNum("PERC_MOP", 5.483): tol = CfgNum("MOP_TOL", 1)
+    If pct > perc + tol Then
+        StatusMop = "MOP ACIMA"
+    ElseIf pct < perc - tol Then
+        StatusMop = "MOP ABAIXO"
+    Else
+        StatusMop = "OK"
+    End If
+End Function
+
 Private Function ColExata(ws As Worksheet, frags As Variant) As Long
     ' v16: le a linha 1 de uma vez (array); so igualdade exata.
     Dim ult As Long
@@ -7600,14 +7844,13 @@ Private Sub Gerar_CheckCapitalizacao()
         If Not temCorte Then RegistrarAviso "CONFIG > CAP_DATA_CORTE invalida (" & sCorte & _
             "): use dd/mm/aaaa. O teste LOTE ENVIADO APOS O CORTE nao rodou."
     End If
-    Dim percMop As Double: percMop = CfgNum("CAP_MOP_SRV_PERC", 11)
-    Dim tolMop As Double: tolMop = CfgNum("CAP_MOP_SRV_TOL", 1)
+    ' v17: MOP unico (CONFIG MOP_BASE / PERC_MOP / MOP_TOL), igual a ANALISE DE CA
+    Dim percMop As Double: percMop = CfgNum("PERC_MOP", 5.483)
     Dim percMedia As Double: percMedia = CfgNum("CAP_PERC_ABAIXO_MEDIA", 10) / 100
     Dim limM As Double: limM = CfgNum("CAP_CABO_LIMITE_M", 7)
 
-    ' MOP e SERVICO pela classe de custo (BASE DE INFO da capitalizacao)
-    Dim dMopCls As Object, dSrvExtra As Object
-    Set dMopCls = ListaCfgCap("CAP_CLASSES_MOP", "8010260000;8010270000;8010280000;8010290000;8110260000;8110270000;8110280000;8110290000;8210260000;8210270000;8210280000;8210290000;8990260000;8990270000;8990280000;8990290000;8950270000;8950280000;8010420000;8019930000;8119930000;8990020000")
+    ' SERVICO pela classe de custo (BASE DE INFO da capitalizacao); MOP via MopPapelLinha
+    Dim dSrvExtra As Object
     Set dSrvExtra = ListaCfgCap("CAP_CLASSES_SRV_EXTRA", "8110150000;8111290000;8990080000")
 
     Dim cData As Long
@@ -7618,7 +7861,10 @@ Private Sub Gerar_CheckCapitalizacao()
         "nao encontrada na base; o teste LOTE ENVIADO APOS O CORTE nao rodou."
 
     Dim dPep As Object: Set dPep = CreateObject("Scripting.Dictionary")   ' pep -> idx
-    Dim aV() As Double: ReDim aV(0 To 7, 1 To 64)  ' 0 TOTAL 1 UC 2 COM 3 SRV 4 MOP 5 MO 6 N_APOS 7 ULT_DATA
+    ' 0 TOTAL 1 UC 2 COM 3 SRV 4 MOP 5 MO(instalacao) 6 N_APOS 7 ULT_DATA
+    ' v17: 8 BASE MOP 9 ATV DRT 10 MAO DE OBRA (categoria, base do teste ATV)
+    Dim aV() As Double: ReDim aV(0 To 10, 1 To 64)
+    Dim nOutros As Long, vOutros As Double        ' v17: OUTROS CUSTOS
     Dim aN() As Long: ReDim aN(0 To 4, 1 To 64)    ' 0 ZERADA 1 NEGATIVO 2 ABAIXO 3 SRV_CLS_MAT 4 CABO
     Dim nP As Long
 
@@ -7639,7 +7885,7 @@ Private Sub Gerar_CheckCapitalizacao()
         If Not dPep.Exists(pep) Then
             nP = nP + 1
             If nP > UBound(aV, 2) Then
-                ReDim Preserve aV(0 To 7, 1 To UBound(aV, 2) * 2)
+                ReDim Preserve aV(0 To 10, 1 To UBound(aV, 2) * 2)
                 ReDim Preserve aN(0 To 4, 1 To UBound(aN, 2) * 2)
             End If
             dPep(pep) = nP
@@ -7651,7 +7897,10 @@ Private Sub Gerar_CheckCapitalizacao()
         cc = NormCod(ValorCampo(i, cClasse))
         aV(0, p) = aV(0, p) + v
 
-        If EhMaterial(cl) Then
+        If EhOutrosCustos(cl) Then
+            ' v17: sem codigo de material (ICMS, viagem...) = OUTROS CUSTOS
+            nOutros = nOutros + 1: vOutros = vOutros + v
+        ElseIf EhMaterial(cl) Then
             If cl = "UC" Or cl = "UAR" Then aV(1, p) = aV(1, p) + v
             If cl = "COM" Then aV(2, p) = aV(2, p) + v
             ' linhas sem codigo de material (ICMS, frete...) nao entram nos testes de item
@@ -7661,14 +7910,23 @@ Private Sub Gerar_CheckCapitalizacao()
                 dQ(k) = dQ(k) + q: dVm(k) = dVm(k) + v
             End If
         Else
-            If dMopCls.Exists(cc) Then
-                aV(4, p) = aV(4, p) + v
-            ElseIf Left$(cc, 2) = "82" Or dSrvExtra.Exists(cc) Then
-                aV(3, p) = aV(3, p) + v
+            If MopPapelLinha(i) <> 1 Then
+                If Left$(cc, 2) = "82" Or dSrvExtra.Exists(cc) Then aV(3, p) = aV(3, p) + v
             End If
             cat = CategoriaAnaliseCA(i)
-            If cat = "MAO DE OBRA" Or cat = "MAO DE OBRA CIVIL" Then aV(5, p) = aV(5, p) + v
+            If cat = "MAO DE OBRA" Or cat = "MAO DE OBRA CIVIL" Then
+                aV(5, p) = aV(5, p) + v
+            ElseIf cat <> "ATIVACAO DIRETA" And cat <> "MOP" And EhCodServicoCap(cod) Then
+                aV(5, p) = aV(5, p) + v       ' v17: codigo do catalogo de servicos = instalacao
+            End If
+            If cat = "MAO DE OBRA" Then aV(10, p) = aV(10, p) + v
+            If cat = "ATIVACAO DIRETA" Then aV(9, p) = aV(9, p) + v
         End If
+        ' v17: MOP unico (mesma regra da ANALISE DE CA)
+        Select Case MopPapelLinha(i)
+            Case 1: aV(4, p) = aV(4, p) + v
+            Case 2: aV(8, p) = aV(8, p) + v
+        End Select
 
         ' Servico lancado em classe de custo de material (811...)
         If Left$(cc, 3) = "811" And cod <> "" Then
@@ -7692,6 +7950,9 @@ Private Sub Gerar_CheckCapitalizacao()
 ProxLin:
     Next i
     If nP = 0 Then Exit Sub
+    If nOutros > 0 Then RegistrarAviso "OUTROS CUSTOS (IMPOSTO/DESPESA): " & nOutros & " linha(s) sem codigo de material " & _
+        "(classificacao FALTA: ICMS, viagem...) = R$ " & Format$(vOutros, "#,##0.00") & ". Ficaram fora de material, UC/COM, " & _
+        "QTD x VALOR e MAT vs SRV; somam no total do PEP e no CA pela classe de custo."
 
     ' Preco medio por material (ODI/ODM): soma |VALOR| / soma |QTD|
     Dim dPmV As Object, dPmQ As Object
@@ -7776,7 +8037,7 @@ ProxSrv:
     Dim outp() As Variant: ReDim outp(0 To nP, 1 To nC)
     Dim hdr As Variant
     hdr = Array("PEP4NIVEL", "PEP3", "TIPO_PEP", "VALOR_TOTAL", "VALOR_UC_UAR", "VALOR_COM", _
-                "VALOR_SERVICO", "VALOR_MOP", "% MOP/SERVICO", "STATUS MOP", "STATUS UC/UAR", _
+                "VALOR_SERVICO", "VALOR_MOP", "% MOP/BASE", "STATUS MOP", "STATUS UC/UAR", _
                 "STATUS COM", "VALOR_MAO_DE_OBRA", "STATUS INSTALACAO", "N QTD ZERADA", _
                 "N VALOR NEGATIVO", "N ABAIXO PRECO MEDIO", "N SRV CLASSE MATERIAL", "N CABO KG", _
                 "N LANCAMENTOS APOS CORTE", "ULTIMO LANCAMENTO APOS CORTE")
@@ -7803,22 +8064,21 @@ ProxSrv:
         outp(r + 1, 6) = Round(aV(2, p), 2): outp(r + 1, 7) = Round(aV(3, p), 2)
         outp(r + 1, 8) = Round(aV(4, p), 2)
 
-        ' MOP / SERVICO (esperado ~11%)
-        If Round(aV(3, p), 2) <> 0 Then
-            pct = aV(4, p) / aV(3, p) * 100
-            outp(r + 1, 9) = Round(pct, 2)
-            If Round(aV(4, p), 2) = 0 Then
-                outp(r + 1, 10) = "SEM MOP - VERIFICAR": AddMotCap m, bloq, "SEM MOP"
-            ElseIf pct > percMop + tolMop Then
-                outp(r + 1, 10) = "MOP ACIMA": AddMotCap m, bloq, "MOP ACIMA DE " & percMop & "%"
-            ElseIf pct < percMop - tolMop Then
-                outp(r + 1, 10) = "MOP ABAIXO": AddMotCap m, bloq, "MOP ABAIXO DE " & percMop & "%"
-            Else
-                outp(r + 1, 10) = "OK"
-            End If
-        Else
-            outp(r + 1, 10) = "SEM SERVICO"
-        End If
+        ' v17: MOP unico sobre a base MOP_BASE (PERC_MOP +- MOP_TOL); ODD nao testada;
+        ' SEM MOP = QUESTIONAR (pode ser MOP ainda nao apropriado)
+        If Round(aV(8, p), 2) <> 0 Then outp(r + 1, 9) = Round(aV(4, p) / aV(8, p) * 100, 2)
+        Select Case StatusMop(tp, aV(4, p), aV(8, p))
+            Case "SEM MOP"
+                outp(r + 1, 10) = "SEM MOP - QUESTIONAR": AddMotCap m, bloq, "QUESTIONAR: SEM MOP"
+            Case "MOP SEM BASE"
+                outp(r + 1, 10) = "MOP SEM BASE - QUESTIONAR": AddMotCap m, bloq, "QUESTIONAR: MOP SEM BASE"
+            Case "MOP ACIMA"
+                outp(r + 1, 10) = "MOP ACIMA": AddMotCap m, bloq, "MOP ACIMA DE " & percMop & "% (" & MopModo() & ")"
+            Case "MOP ABAIXO"
+                outp(r + 1, 10) = "MOP ABAIXO": AddMotCap m, bloq, "MOP ABAIXO DE " & percMop & "% (" & MopModo() & ")"
+            Case Else
+                outp(r + 1, 10) = StatusMop(tp, aV(4, p), aV(8, p))
+        End Select
 
         ' UC/UAR e COM
         If tp = "D" Then
@@ -7844,6 +8104,12 @@ ProxSrv:
         Else
             outp(r + 1, 14) = "OK"
         End If
+
+        ' v17: ATV DRT / MAO DE OBRA (mesma regra da ANALISE DE CA) - questiona, nao bloqueia
+        Select Case StatusAtvDrt(pep, aV(9, p), aV(10, p))
+            Case "FORA DA FAIXA": AddMotCap m, bloq, "QUESTIONAR: ATV DRT FORA DA FAIXA"
+            Case "SEM MAO DE OBRA - VERIFICAR": AddMotCap m, bloq, "QUESTIONAR: ATV DRT SEM MAO DE OBRA"
+        End Select
 
         outp(r + 1, 15) = aN(0, p): If aN(0, p) > 0 Then AddMotCap m, bloq, "QUANTIDADE ZERADA"
         outp(r + 1, 16) = aN(1, p): If aN(1, p) > 0 Then AddMotCap m, bloq, "VALOR NEGATIVO"
@@ -8127,7 +8393,7 @@ Private Sub GarantirConfig()
         Array("CAT_COMBO", "%USERPROFILE%\Downloads\SRV_COMBO_ATUAIS.xlsx", "Caminho do catalogo SRV COMBO"), _
         Array("PERC_ATV_EME", "8", "Percentual ATV PREVISTA para PEP EME/EMM (%)"), _
         Array("PERC_ATV_PADRAO", "25", "Percentual ATV PREVISTA para os demais PEPs (%)"), _
-        Array("PERC_MOP", "5.483", "Percentual do CALCULO DO MOP sobre o total sem MOP (%)"), _
+        Array("PERC_MOP", "5.483", "MOP esperado (%) sobre a base MOP_BASE - ANALISE DE CA e CHECK CAPITALIZACAO (v17)"), _
         Array("MARGEM_ADERENCIA", "10", "Margem da aderencia MAT vs SRV (%)"), _
         Array("CLASSES_VIAGEM", "8111290000;8210390000;8210550000", "Classes de custo de viagem (Alimentacao;Passagem;Hospedagem)"), _
         Array("CLASSE_COMBUSTIVEL", "8119980000", "Classe de custo de combustiveis -> categoria OUTROS na ANALISE DE CA"), _
@@ -8138,8 +8404,8 @@ Private Sub GarantirConfig()
     ' chaves do CHECK CAPITALIZACAO (bloco separado: limite de 24 continuacoes por instrucao)
     def = JuntarArrCfg(def, Array( _
         Array("CAP_DATA_CORTE", "", "CHECK CAPITALIZACAO: data de corte do lote (dd/mm/aaaa). Lancamentos depois dela = LOTE ENVIADO APOS O CORTE"), _
-        Array("CAP_MOP_SRV_PERC", "11", "CHECK CAPITALIZACAO: MOP esperado sobre SERVICO (%)"), _
-        Array("CAP_MOP_SRV_TOL", "1", "CHECK CAPITALIZACAO: tolerancia do MOP/SERVICO (pontos %)"), _
+        Array("CAP_MOP_SRV_PERC", "11", "OBSOLETO v17 (nao usado): use MOP_BASE=SERVICO e PERC_MOP=11"), _
+        Array("CAP_MOP_SRV_TOL", "1", "OBSOLETO v17 (nao usado): use MOP_TOL"), _
         Array("CAP_PERC_ABAIXO_MEDIA", "10", "CHECK CAPITALIZACAO: preco unitario abaixo deste % do preco medio = ABAIXO DO PRECO MEDIO (questionar)"), _
         Array("CAP_CABO_LIMITE_M", "7", "CHECK CAPITALIZACAO: cabo UC em KG abaixo deste comprimento (m) vira COM"), _
         Array("CAP_DIG_SOLICITANTE", "08;09;10;11;12;13;14", "CHECK CAPITALIZACAO: digitos 5-6 validos do CC solicitante"), _
@@ -8149,6 +8415,11 @@ Private Sub GarantirConfig()
         Array("CAP_PI_VALIDOS", "ZCM054;ZCM058;ZCM052", "CHECK CAPITALIZACAO: perfis de investimento validos"), _
         Array("CAP_CLASSES_MOP", "", "CHECK CAPITALIZACAO: classes de custo de MOP (vazio = lista da BASE DE INFO)"), _
         Array("CAP_CLASSES_SRV_EXTRA", "", "CHECK CAPITALIZACAO: classes fora do grupo 82 que contam como SERVICO (vazio = padrao)")))
+    ' v17: MOP unico e teste ATV DRT
+    def = JuntarArrCfg(def, Array( _
+        Array("MOP_BASE", "TOTAL_SEM_MOP", "Base do MOP (v17): TOTAL_SEM_MOP (padrao, onde o 5,483% foi calibrado) | CA (linhas Classificacao CA, sem o MOP) | SERVICO (classes 82*; regra antiga 11%)"), _
+        Array("MOP_TOL", "1", "Tolerancia do MOP sobre a base (pontos %) - ANALISE DE CA e CHECK CAPITALIZACAO"), _
+        Array("ATV_TOL", "5", "Tolerancia do teste ATV DRT / MAO DE OBRA (pontos % sobre PERC_ATV_PADRAO / PERC_ATV_EME)")))
 
     ' indexa chaves ja existentes
     Dim ult As Long: ult = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
